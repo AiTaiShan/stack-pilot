@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Card, Row, Col, Statistic } from 'antd'
 import { ProjectOutlined, CloudServerOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
-import axios from 'axios'
+import client from '../api/client'
 
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState({ projects: 0, deployments: 0, success: 0, failed: 0 })
@@ -10,12 +10,8 @@ const Dashboard: React.FC = () => {
     const fetchStats = async () => {
       try {
         const [projectsRes, statsRes] = await Promise.all([
-          axios.get('/api/v1/projects/', {
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-          }),
-          axios.get('/api/v1/monitoring/deployments/stats', {
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-          })
+          client.get('/projects/'),
+          client.get('/monitoring/deployments/stats')
         ])
         setStats({
           projects: projectsRes.data.data.pagination.total,

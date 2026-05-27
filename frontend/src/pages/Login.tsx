@@ -2,20 +2,20 @@ import React, { useState } from 'react'
 import { Form, Input, Button, Card, message } from 'antd'
 import { UserOutlined, LockOutlined } from '@ant-design/icons'
 import { useNavigate, Link } from 'react-router-dom'
-import axios from 'axios'
+import client from '../api/client'
+import { useAuthStore } from '../stores/authStore'
 
 const Login: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+  const setAuth = useAuthStore((state) => state.setAuth)
 
   const onFinish = async (values: { username: string; password: string }) => {
     setLoading(true)
     try {
-      const response = await axios.post('/api/v1/auth/login', values)
+      const response = await client.post('/auth/login', values)
       const { token, refresh_token, user } = response.data.data
-      localStorage.setItem('token', token)
-      localStorage.setItem('refresh_token', refresh_token)
-      localStorage.setItem('user', JSON.stringify(user))
+      setAuth(token, refresh_token, user)
       message.success('登录成功')
       navigate('/')
     } catch (error: any) {

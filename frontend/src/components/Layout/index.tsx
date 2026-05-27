@@ -2,6 +2,7 @@ import React from 'react'
 import { Layout as AntLayout, Menu } from 'antd'
 import { DashboardOutlined, ProjectOutlined, CloudServerOutlined, LogoutOutlined } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { useAuthStore } from '../../stores/authStore'
 
 const { Header, Sider, Content } = AntLayout
 
@@ -9,10 +10,10 @@ const Layout: React.FC = () => {
   const navigate = useNavigate()
   const location = useLocation()
 
+  const clearAuth = useAuthStore((state) => state.clearAuth)
+
   const handleLogout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('refresh_token')
-    localStorage.removeItem('user')
+    clearAuth()
     navigate('/login')
   }
 

@@ -9,6 +9,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.env
 
 # Node
 node_modules/
@@ -41,7 +42,27 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 
+# Testing
+htmlcov/
+.coverage
+.coverage.*
+*.cover
+.pytest_cache/
+.mypy_cache/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Frontend build
+frontend/dist/
+frontend/build/
+
 # Claude
 .claude
 CLAUDE.md
 docs/superpowers
+.superpowers
+.vite
+openspec

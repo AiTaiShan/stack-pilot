@@ -1,23 +1,24 @@
-version: '3.8'
-
 services:
   backend:
     build: ./backend
     ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/stackpilot
-      - REDIS_URL=redis://redis:6379
+      - "9000:9000"
+    env_file:
+      - .env
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./backend:/app
 
   frontend:
     build: ./frontend
     ports:
-      - "3000:3000"
+      - "5173:5173"
+    env_file:
+      - .env
     depends_on:
       - backend
     volumes:
@@ -26,14 +27,17 @@ services:
 
   db:
     image: postgres:15
-    environment:
-      - POSTGRES_DB=stackpilot
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
+    env_file:
+      - .env
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -41,6 +45,11 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
