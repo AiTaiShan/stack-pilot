@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Card, Descriptions, Button, Table, Space, message, Modal, Select, Form, Input, Tag, Tooltip, Drawer, Popconfirm } from 'antd'
+import type { ColumnType } from 'antd/es/table/interface'
 import { EyeOutlined, StopOutlined, RedoOutlined } from '@ant-design/icons'
 import client from '../api/client'
 import DeploymentProgress from '../components/DeploymentProgress'
@@ -204,7 +205,7 @@ const ProjectDetail: React.FC = () => {
     return () => clearInterval(interval)
   }, [drawerVisible, selectedDeployment?.id, selectedDeployment?.status])
 
-  const deploymentColumns = [
+  const deploymentColumns: ColumnType<any>[] = [
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: (status: string) => (

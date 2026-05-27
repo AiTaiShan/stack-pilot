@@ -33,21 +33,6 @@ const STEPS: StepInfo[] = [
   { key: 'verify', title: '验证部署', description: '检查服务健康状态' },
 ]
 
-const statusIcons: Record<string, React.ReactNode> = {
-  pending: <ClockCircleOutlined style={{ color: '#d9d9d9' }} />,
-  running: <SyncOutlined spin style={{ color: '#1890ff' }} />,
-  success: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
-  failed: <CloseCircleOutlined style={{ color: '#ff4d4f' }} />,
-  waiting: <ClockCircleOutlined style={{ color: '#d9d9d9' }} />,
-}
-
-const levelColors: Record<string, string> = {
-  info: 'blue',
-  warning: 'orange',
-  error: 'red',
-  debug: 'gray',
-}
-
 interface DeploymentProgressProps {
   deploymentId: string
   status: string
@@ -64,7 +49,6 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({
   showCard = true,
 }) => {
   const [logs, setLogs] = useState<LogEntry[]>([])
-  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     if (status === 'running' || status === 'paused') {

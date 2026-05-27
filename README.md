@@ -35,7 +35,7 @@
 | 层级 | 技术 |
 |------|------|
 | 后端 | Python 3.10+ / FastAPI / SQLAlchemy / Alembic |
-| 前端 | React 18 / TypeScript / Ant Design / Zustand |
+| 前端 | React 18 / TypeScript / Ant Design / Zustand / ESLint(含 import 校验) |
 | 数据库 | PostgreSQL 15 |
 | 缓存 | Redis 7 |
 | LLM | 阿里百炼 (qwen-plus) / OpenAI 兼容接口 |
@@ -107,19 +107,24 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 初始化数据库
 cp ../.env.example ../.env  # 首次需要
-alembic revision --autogenerate -m "init"
 alembic upgrade head
 
 # 启动
 uvicorn app.main:app --reload --port 9000
 ```
 
-#### 3. 前端
+#### 3. 前端（请使用 pnpm）
 
 ```bash
 cd frontend
-npm install --registry=https://registry.npmmirror.com
-npm run dev
+pnpm install
+pnpm run dev
+
+# 代码检查
+pnpm run lint
+
+# 生产构建
+pnpm run build
 ```
 
 #### 4. 运行测试

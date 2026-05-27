@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Tag, Space, message, Button, Popconfirm } from 'antd'
+import type { ColumnType } from 'antd/es/table/interface'
 import { StopOutlined, RedoOutlined, EyeOutlined } from '@ant-design/icons'
 import client from '../api/client'
 
@@ -87,7 +88,7 @@ const Deployments: React.FC = () => {
     }
   }
 
-  const columns = [
+  const columns: ColumnType<any>[] = [
     { title: '项目', dataIndex: 'project_name', key: 'project_name', width: 120 },
     { title: '部署ID', dataIndex: 'id', key: 'id', width: 100, ellipsis: true },
     {
