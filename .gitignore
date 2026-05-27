@@ -27,8 +27,11 @@ yarn-error.log*
 
 # Environment
 .env
+!.env.example
 .env.local
 .env.*.local
+.env.*
+.envrc
 
 # Docker
 docker-compose.override.yml
