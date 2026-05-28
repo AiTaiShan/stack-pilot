@@ -32,7 +32,9 @@ class DeploymentManager:
 
     STEPS: List[str] = [
         DeploymentStep.CLONE.value,
+        DeploymentStep.GENERATE_REVIEW.value,
         DeploymentStep.BUILD.value,
+        DeploymentStep.ENV_REVIEW.value,
         DeploymentStep.PUSH.value,
         DeploymentStep.DEPLOY.value,
         DeploymentStep.CONFIGURE.value,
@@ -41,10 +43,12 @@ class DeploymentManager:
 
     STEP_PROGRESS: Dict[str, int] = {
         DeploymentStep.CLONE.value: 10,
-        DeploymentStep.BUILD.value: 40,
-        DeploymentStep.PUSH.value: 60,
-        DeploymentStep.DEPLOY.value: 80,
-        DeploymentStep.CONFIGURE.value: 90,
+        DeploymentStep.GENERATE_REVIEW.value: 35,
+        DeploymentStep.BUILD.value: 55,
+        DeploymentStep.ENV_REVIEW.value: 65,
+        DeploymentStep.PUSH.value: 75,
+        DeploymentStep.DEPLOY.value: 85,
+        DeploymentStep.CONFIGURE.value: 93,
         DeploymentStep.VERIFY.value: 100,
     }
 

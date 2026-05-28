@@ -66,14 +66,17 @@ def test_calculate_progress():
     # step_index=1 表示 clone 完成，进度为 10
     assert manager._calculate_progress(1) == 10
 
-    # step_index=2 表示 build 完成，进度为 40
-    assert manager._calculate_progress(2) == 40
+    # step_index=2 表示 generate_review 完成，进度为 35
+    assert manager._calculate_progress(2) == 35
 
-    # step_index=5 表示 verify 完成，进度为 100
-    assert manager._calculate_progress(5) == 100
+    # step_index=3 表示 build 完成，进度为 55
+    assert manager._calculate_progress(3) == 55
+
+    # step_index=7 表示 verify 完成，进度为 100
+    assert manager._calculate_progress(7) == 100
 
     # 超出范围也返回 100
-    assert manager._calculate_progress(6) == 100
+    assert manager._calculate_progress(8) == 100
 
 
 # ========== 错误码测试 ==========
