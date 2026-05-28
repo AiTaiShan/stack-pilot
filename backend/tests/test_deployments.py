@@ -42,12 +42,13 @@ def test_deployment_status_enum():
 def test_deployment_step_enum():
     """验证部署步骤枚举值"""
     assert DeploymentStep.CLONE.value == "clone"
+    assert DeploymentStep.GENERATE_REVIEW.value == "generate_review"
     assert DeploymentStep.BUILD.value == "build"
     assert DeploymentStep.PUSH.value == "push"
     assert DeploymentStep.DEPLOY.value == "deploy"
     assert DeploymentStep.CONFIGURE.value == "configure"
     assert DeploymentStep.VERIFY.value == "verify"
-    assert len(DeploymentStep) == 6
+    assert len(DeploymentStep) == 8
 
 
 # ========== 进度计算测试 ==========

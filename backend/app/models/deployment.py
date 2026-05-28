@@ -22,7 +22,9 @@ class DeploymentStatus(str, enum.Enum):
 
 class DeploymentStep(str, enum.Enum):
     CLONE = "clone"
+    GENERATE_REVIEW = "generate_review"
     BUILD = "build"
+    ENV_REVIEW = "env_review"
     PUSH = "push"
     DEPLOY = "deploy"
     CONFIGURE = "configure"
