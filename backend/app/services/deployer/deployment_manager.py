@@ -994,66 +994,33 @@ CMD ["java", "-jar", "app.jar"]
         self._log(db, deployment_id, "info", "Env review step (placeholder)")
 
     def _step_build(self, db: Session, deployment_id: str, deployment: Deployment):
+        """仅构建 Docker 镜像（文件生成和审核已在 generate_review 完成）"""
         import os
-        import subprocess
 
         project_info = deployment.config or {}
         repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "")
         repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
         commit_short = deployment.commit_hash[:8] if deployment.commit_hash else "latest"
+        project_type = project_info.get("type", "")
 
-        # 清理旧镜像，防止容器膨胀
+        # 清理旧镜像
         self._cleanup_old_images(db, deployment_id, repo_name)
 
-        # 保存依赖信息到文件（供 docker-compose 生成使用）
-        deps = project_info.get("dependencies", {})
-        if deps.get("external_services"):
-            deps_dir = os.path.join(repo_dir, ".stackpilot")
-            os.makedirs(deps_dir, exist_ok=True)
-            with open(os.path.join(deps_dir, "dependencies.json"), "w") as f:
-                json.dump(deps, f)
-
-            self._log(db, deployment_id, "info",
-                      f"External services will be added: {', '.join(deps['external_services'])}")
-
-        project_type = project_info.get("type", "")
-        image_tag = f"stackpilot/{repo_name}:{commit_short}"
-
-        if project_type == "multi-module-java":
+        # 按项目类型构建镜像
+        if project_type in ("multi-module-java", "multi-module-java-with-frontend"):
             self._build_multi_module_java(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-        elif project_type == "multi-module-java-with-frontend":
-            self._build_multi_module_java(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-            self._build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-        elif project_type == "microservices":
+            if "with-frontend" in project_type:
+                self._build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
+        elif project_type in ("microservices", "microservices-with-frontend"):
             self._build_microservices(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-        elif project_type == "microservices-with-frontend":
-            self._build_microservices(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-            self._build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
         elif project_type == "monorepo":
             self._build_monorepo(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
         else:
-            self.docker_service.generate_dockerfile(project_info, repo_dir)
+            # 单体项目
+            image_tag = f"stackpilot/{repo_name}:{commit_short}"
             self.docker_service.build_image(repo_dir, image_tag)
             deployment.image_tag = image_tag
-            db.commit()
-
-        # 适配配置文件中的 localhost 为 Docker 服务名
-        if project_info.get("config_adaptation_needed") or deps.get("external_services"):
-            self._adapt_config_for_docker(repo_dir, deps)
-
-        # 所有类型都执行 AI 审核 Dockerfile
-        self._ai_review_dockerfile(db, deployment_id, repo_dir, project_info)
-
-        # 单体项目和组合项目生成 docker-compose（包含依赖服务）
-        if project_type not in ("multi-module-java", "multi-module-java-with-frontend",
-                                 "microservices", "microservices-with-frontend", "monorepo"):
-            if deps.get("external_services"):
-                self._generate_single_app_compose(repo_dir, repo_name, image_tag, deps)
-
-        # 所有类型都执行 AI 审核 docker-compose.yml
-        compose_path = os.path.join(repo_dir, "docker-compose.yml")
-        if os.path.exists(compose_path):
-            self._ai_review_compose(db, deployment_id, repo_dir, project_info, deps)
+        db.commit()
 
     def _ai_review_dockerfile(self, db: Session, deployment_id: str, repo_dir: str, project_info: dict):
         """AI 审核 Dockerfile，注入完整扫描上下文"""
