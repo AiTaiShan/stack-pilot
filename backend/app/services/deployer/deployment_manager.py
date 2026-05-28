@@ -33,6 +33,7 @@ class DeploymentManager:
     STEPS: List[str] = [
         DeploymentStep.CLONE.value,
         DeploymentStep.BUILD.value,
+        DeploymentStep.ENV_REVIEW.value,
         DeploymentStep.PUSH.value,
         DeploymentStep.DEPLOY.value,
         DeploymentStep.CONFIGURE.value,
@@ -42,6 +43,7 @@ class DeploymentManager:
     STEP_PROGRESS: Dict[str, int] = {
         DeploymentStep.CLONE.value: 10,
         DeploymentStep.BUILD.value: 40,
+        DeploymentStep.ENV_REVIEW.value: 50,
         DeploymentStep.PUSH.value: 60,
         DeploymentStep.DEPLOY.value: 80,
         DeploymentStep.CONFIGURE.value: 90,
@@ -216,6 +218,7 @@ class DeploymentManager:
         step_methods = {
             DeploymentStep.CLONE.value: self._step_clone,
             DeploymentStep.BUILD.value: self._step_build,
+            DeploymentStep.ENV_REVIEW.value: self._step_env_review,
             DeploymentStep.PUSH.value: self._step_push,
             DeploymentStep.DEPLOY.value: self._step_deploy,
             DeploymentStep.CONFIGURE.value: self._step_configure,
@@ -839,6 +842,21 @@ class DeploymentManager:
         compose_path = os.path.join(repo_dir, "docker-compose.yml")
         if os.path.exists(compose_path):
             self._ai_review_compose(db, deployment_id, repo_dir, project_info, deps)
+
+        # 保存待审核环境变量到 deployment.config
+        try:
+            pending = self._generate_service_env_vars(repo_dir, "spring")
+            if not pending:
+                pending = self._generate_service_env_vars(repo_dir, "generic")
+            dc = dict(deployment.config or {})
+            dc["pending_env_vars"] = pending
+            deployment.config = dc
+            db.commit()
+            if pending:
+                self._log(db, deployment_id, "info",
+                          f"Saved {len(pending)} env vars for user review")
+        except Exception as e:
+            self._log(db, deployment_id, "warning", f"Failed to save pending env vars: {e}")
 
     def _ai_review_dockerfile(self, db: Session, deployment_id: str, repo_dir: str, project_info: dict):
         """AI 审核 Dockerfile"""
@@ -1583,9 +1601,17 @@ services:
     image: {images['backend']}
     ports:
       - "{backend_port}:{backend_port}"
-    environment:
-      - NODE_ENV=production
 """
+            # 注入依赖服务环境变量
+            backend_lang = backend.get("language", "unknown")
+            framework = "spring" if backend_lang == "java" else "generic"
+            env_vars = self._generate_service_env_vars(repo_dir, framework)
+            if env_vars:
+                compose += "    environment:\n"
+                for k, v in sorted(env_vars.items()):
+                    compose += f"      {k}={v}\n"
+            else:
+                compose += "    environment:\n      - NODE_ENV=production\n"
 
         if "frontend" in images:
             compose += f"""  frontend:
@@ -1603,6 +1629,100 @@ services:
 
         with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
             f.write(compose)
+
+    def _apply_confirmed_env_vars_to_compose(self, deployment_id: str) -> bool:
+        """将用户确认的环境变量写入 docker-compose.yml"""
+        import os
+
+        deployment = self.db.query(Deployment).filter(Deployment.id == deployment_id).first()
+        if not deployment:
+            return False
+
+        config = dict(deployment.config or {})
+        confirmed_env_vars = config.get("pending_env_vars", {})
+
+        if not confirmed_env_vars:
+            self._log(self.db, deployment_id, "info", "No env vars to apply")
+            return True
+
+        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "")
+        repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
+        compose_path = os.path.join(repo_dir, "docker-compose.yml")
+
+        if not os.path.exists(compose_path):
+            self._log(self.db, deployment_id, "warning", "docker-compose.yml not found")
+            return False
+
+        try:
+            with open(compose_path, "r", encoding="utf-8") as f:
+                c_lines = f.readlines()
+
+            # 找 app 或 backend 服务
+            service_idx = -1
+            for j, line in enumerate(c_lines):
+                s = line.strip()
+                if s == "app:" or s == "backend:":
+                    service_idx = j
+                    break
+
+            if service_idx < 0:
+                self._log(self.db, deployment_id, "warning", "No app/backend service found")
+                return False
+
+            # 获取缩进
+            indent = ""
+            for ch in c_lines[service_idx]:
+                if ch == " ":
+                    indent += ch
+                else:
+                    break
+            env_indent = indent + "    "
+            child_indent = env_indent + "  "
+
+            # 找现有 environment 块
+            env_start = -1
+            env_end = -1
+            for j in range(service_idx + 1, len(c_lines)):
+                if not c_lines[j].strip():
+                    continue
+                if not c_lines[j].startswith(indent):
+                    break
+                if c_lines[j].strip() == "environment:":
+                    env_start = j
+                    env_end = j + 1
+                    for k in range(j + 1, len(c_lines)):
+                        if not c_lines[k].startswith(env_indent) or not c_lines[k].strip():
+                            env_end = k
+                            break
+                    break
+
+            # 构建新 environment 段
+            n_lines = []
+            n_lines.append(env_indent + "environment:\n")
+            for k, v in sorted(confirmed_env_vars.items()):
+                n_lines.append(child_indent + k + "=" + v + "\n")
+
+            if env_start >= 0:
+                c_lines[env_start:env_end] = n_lines
+            else:
+                insert_pos = service_idx + 1
+                for j in range(service_idx + 1, min(service_idx + 15, len(c_lines))):
+                    if c_lines[j].strip() and not c_lines[j].strip().startswith("#"):
+                        insert_pos = j + 1
+                        break
+                for nl in reversed(n_lines):
+                    c_lines.insert(insert_pos, nl)
+
+            with open(compose_path, "w", encoding="utf-8") as f:
+                f.writelines(c_lines)
+
+            self._log(self.db, deployment_id, "info",
+                      f"Applied {len(confirmed_env_vars)} env vars to docker-compose.yml")
+            return True
+
+        except Exception as e:
+            self._log(self.db, deployment_id, "error", f"Failed to apply env vars: {e}")
+            return False
 
     def _step_push(self, db: Session, deployment_id: str, deployment: Deployment):
         if not deployment.image_tag:
@@ -1827,6 +1947,29 @@ services:
                     severity=ErrorSeverity.HIGH,
                 )
         self._log(db, deployment_id, "info", "Deployment verified successfully")
+
+    def _step_env_review(self, db: Session, deployment_id: str, deployment: Deployment):
+        """环境变量审核步骤 - 自动暂停等待用户确认"""
+        config = dict(deployment.config or {})
+        env_vars = config.get("pending_env_vars", {})
+
+        if not env_vars:
+            self._log(db, deployment_id, "info", "No environment variables to review, proceeding...")
+            return
+
+        self._log(db, deployment_id, "info",
+                  f"Generated {len(env_vars)} environment variables for review")
+        self._log(db, deployment_id, "info",
+                  "Deployment paused for environment variable review. "
+                  "Use GET /api/v1/deployments/{id}/env-vars to review, "
+                  "PUT /api/v1/deployments/{id}/env-vars to modify, "
+                  "and POST /api/v1/deployments/{id}/confirm-env-vars to confirm and proceed.")
+
+        # 设置暂停标志 - 下一轮循环将自动暂停
+        if deployment_id in self.pause_flags:
+            self.pause_flags[deployment_id].set()
+
+        self._log(db, deployment_id, "info", "Pause flag set, will pause before next step")
 
     def _save_checkpoint(
         self,
