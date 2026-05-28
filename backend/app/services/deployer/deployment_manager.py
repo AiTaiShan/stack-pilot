@@ -1088,7 +1088,10 @@ CMD ["java", "-jar", "app.jar"]
             }
             result = ai_service.review_dockerfile(dockerfile_content, scan_context)
 
-            if result.get("approved"):
+            if result.get("skipped"):
+                self._log(db, deployment_id, "warning",
+                          f"AI review skipped ({service_name}): {result.get('reason', 'unknown')}")
+            elif result.get("approved"):
                 self._log(db, deployment_id, "info", f"AI approved Dockerfile ({service_name})")
             else:
                 self._log(db, deployment_id, "warning",
@@ -1127,7 +1130,10 @@ CMD ["java", "-jar", "app.jar"]
             enhanced_deps["framework"] = project_info.get("framework", "unknown")
             result = ai_service.review_docker_compose(compose_content, project_info, enhanced_deps)
 
-            if result.get("approved"):
+            if result.get("skipped"):
+                self._log(db, deployment_id, "warning",
+                          f"AI compose review skipped: {result.get('reason', 'unknown')}")
+            elif result.get("approved"):
                 self._log(db, deployment_id, "info", "AI approved docker-compose.yml")
             else:
                 self._log(db, deployment_id, "warning",
@@ -1296,19 +1302,37 @@ services:
                     compose += f"      - ELASTICSEARCH_HOST={service_name}\n"
                     compose += f"      - ELASTICSEARCH_PORT={service_info.default_port}\n"
 
-        # 添加初始化命令（如果有）
+        # 添加初始化命令（如果有）— 真正执行迁移
         init_commands = db_init.get("init_commands", [])
-        if init_commands:
-            compose += """
-  db-init:
-    image: alpine:latest
-    command: sh -c "echo 'Database initialization completed'
-"""
-            for cmd in init_commands:
-                if not cmd.startswith("#"):
-                    compose += f"      && echo 'Running: {cmd}'\n"
+        real_commands = [cmd for cmd in init_commands if not cmd.startswith("#")]
+        if real_commands:
+            migration_tool = db_init.get("migration_tool", "")
+            tool_images = {
+                "alembic": "python:3.11-slim", "django": "python:3.11-slim",
+                "flyway": "flyway/flyway:latest", "prisma": "node:18-alpine",
+                "typeorm": "node:18-alpine", "knex": "node:18-alpine",
+            }
+            init_image = tool_images.get(migration_tool, "python:3.11-slim")
 
-            compose += """      && echo 'Done'"
+            shell_parts = ["echo 'Waiting for database...'"]
+            for service_name in external_services:
+                if service_name in EXTERNAL_SERVICES:
+                    service_info = EXTERNAL_SERVICES[service_name]
+                    if service_info.category == "database":
+                        port = service_info.default_port
+                        shell_parts.append(
+                            f"for i in $(seq 1 30); do nc -z {service_name} {port} && break || sleep 2; done"
+                        )
+            shell_parts.append("echo 'Database is ready'")
+            for cmd in real_commands:
+                shell_parts.append(f"echo 'Running: {cmd}' && {cmd}")
+            shell_parts.append("echo 'Database initialization completed'")
+            full_cmd = " && ".join(shell_parts)
+
+            compose += f"""
+  db-init:
+    image: {init_image}
+    command: sh -c "{full_cmd}"
     depends_on:
 """
             for service_name in external_services:
@@ -1317,12 +1341,7 @@ services:
                     if service_info.category == "database":
                         compose += f"      - {service_name}\n"
 
-            # 添加卷挂载（迁移文件）
-            migration_dir = db_init.get("migration_dir", "")
-            if migration_dir:
-                compose += f"""    volumes:
-      - ./{migration_dir}:/{migration_dir}
-"""
+            compose += "    volumes:\n      - .:/app\n    working_dir: /app\n"
 
         compose += "\n"
 
@@ -1396,20 +1415,52 @@ services:
         return compose
 
     def _generate_db_init_service(self, repo_dir: str, deps: dict, init_commands: list) -> str:
-        """生成数据库初始化服务"""
+        """生成数据库初始化服务 — 真正执行迁移命令"""
         import os
 
         external_services = deps.get("external_services", [])
         db_init = deps.get("database_init", {})
-
-        # 查找包含迁移文件的目录
-        migration_dir = db_init.get("migration_dir", "")
         migration_tool = db_init.get("migration_tool", "")
 
-        compose = """
+        # 根据迁移工具选择合适的镜像
+        tool_images = {
+            "alembic": "python:3.11-slim",
+            "django": "python:3.11-slim",
+            "flyway": "flyway/flyway:latest",
+            "prisma": "node:18-alpine",
+            "typeorm": "node:18-alpine",
+            "knex": "node:18-alpine",
+            "golang-migrate": "migrate/migrate:latest",
+        }
+        init_image = tool_images.get(migration_tool, "python:3.11-slim")
+
+        # 过滤掉注释命令，构建真正要执行的命令
+        real_commands = [cmd for cmd in init_commands if not cmd.startswith("#")]
+        if not real_commands:
+            real_commands = ["echo 'No migration commands to execute'"]
+
+        # 构建 shell 命令：先等待数据库就绪，再执行迁移
+        shell_parts = ["echo 'Waiting for database...'"]
+        # 等待数据库端口可达
+        for service_name in external_services:
+            if service_name in EXTERNAL_SERVICES:
+                service_info = EXTERNAL_SERVICES[service_name]
+                if service_info.category == "database":
+                    port = service_info.default_port
+                    shell_parts.append(
+                        f"for i in $(seq 1 30); do nc -z {service_name} {port} && break || sleep 2; done"
+                    )
+        shell_parts.append("echo 'Database is ready'")
+        for cmd in real_commands:
+            shell_parts.append(f"echo 'Running: {cmd}' && {cmd}")
+        shell_parts.append("echo 'Database initialization completed'")
+
+        full_cmd = " && ".join(shell_parts)
+
+        compose = f"""
   db-init:
-    image: alpine:latest
-    command: sh -c "echo 'Database initialization completed'"
+    image: {init_image}
+    command: sh -c "{full_cmd}"
     depends_on:
 """
 
@@ -1420,11 +1471,7 @@ services:
                 if service_info.category == "database":
                     compose += f"      - {service_name}\n"
 
-        # 添加卷挂载（如果有迁移文件）
-        if migration_dir:
-            compose += f"""    volumes:
-      - ./{migration_dir}:/{migration_dir}
-"""
+        compose += "    volumes:\n      - .:/app\n    working_dir: /app\n"
 
         return compose
 
@@ -2147,6 +2194,9 @@ services:
             self._log(db, deployment_id, "info", f"Configured {len(env_vars)} environment variables")
 
     def _step_verify(self, db: Session, deployment_id: str, deployment: Deployment):
+        import subprocess
+        import time
+
         if deployment.platform == "k8s" and self.k8s_service:
             config = deployment.config or {}
             namespace = config.get("namespace", "default")
@@ -2163,7 +2213,99 @@ services:
                     message=f"Deployment verification failed: {status}",
                     severity=ErrorSeverity.HIGH,
                 )
+        elif deployment.platform == "local":
+            self._verify_local_deployment(db, deployment)
         self._log(db, deployment_id, "info", "Deployment verified successfully")
+
+    def _verify_local_deployment(self, db: Session, deployment: Deployment):
+        """验证本地部署：容器状态 + 端口监听 + HTTP 可达"""
+        import subprocess
+        import time
+        import socket
+
+        config = deployment.config or {}
+        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
+        deployment_id = str(deployment.id)
+
+        # 1. 等待容器启动（最多 30 秒）
+        self._log(db, deployment_id, "info", "Verifying: waiting for containers to start...")
+        time.sleep(5)
+
+        # 2. 检查容器是否在运行
+        is_compose = config.get("compose") or config.get("type") in (
+            "monorepo", "multi-module-java", "microservices",
+            "multi-module-java-with-frontend", "microservices-with-frontend"
+        )
+
+        if is_compose:
+            project_name = f"stackpilot-{repo_name}"
+            result = subprocess.run(
+                ["docker-compose", "-p", project_name, "ps", "-q"],
+                capture_output=True, text=True, timeout=15
+            )
+            container_ids = [c.strip() for c in result.stdout.strip().split('\n') if c.strip()]
+            if not container_ids:
+                raise AppError(
+                    code=ErrorCode.DOCKER_ERROR,
+                    message="No running containers found for compose project",
+                    severity=ErrorSeverity.HIGH,
+                )
+            # 检查每个容器的状态
+            for cid in container_ids:
+                inspect = subprocess.run(
+                    ["docker", "inspect", "--format", "{{.State.Status}}", cid],
+                    capture_output=True, text=True, timeout=10
+                )
+                status = inspect.stdout.strip()
+                if status != "running":
+                    logs = subprocess.run(
+                        ["docker", "logs", "--tail", "10", cid],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    raise AppError(
+                        code=ErrorCode.DOCKER_ERROR,
+                        message=f"Container {cid[:12]} status={status}. Logs: {logs.stderr[-300:]}",
+                        severity=ErrorSeverity.HIGH,
+                    )
+            self._log(db, deployment_id, "info", f"Verify: {len(container_ids)} containers running")
+        else:
+            app_name = config.get("app_name", "stackpilot-app")
+            inspect = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", app_name],
+                capture_output=True, text=True, timeout=10
+            )
+            if inspect.returncode != 0 or inspect.stdout.strip() != "running":
+                raise AppError(
+                    code=ErrorCode.DOCKER_ERROR,
+                    message=f"Container '{app_name}' is not running",
+                    severity=ErrorSeverity.HIGH,
+                )
+            self._log(db, deployment_id, "info", f"Verify: container '{app_name}' is running")
+
+        # 3. 检查端口是否可达（尝试连接 deploy_url 的端口）
+        deploy_url = deployment.deploy_url or ""
+        if deploy_url:
+            import re
+            port_match = re.search(r':(\d+)', deploy_url)
+            if port_match:
+                port = int(port_match.group(1))
+                for attempt in range(6):
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(3)
+                        sock.connect(("127.0.0.1", port))
+                        sock.close()
+                        self._log(db, deployment_id, "info", f"Verify: port {port} is listening")
+                        break
+                    except (ConnectionRefusedError, socket.timeout, OSError):
+                        if attempt < 5:
+                            time.sleep(5)
+                        else:
+                            raise AppError(
+                                code=ErrorCode.DOCKER_ERROR,
+                                message=f"Port {port} is not reachable after 30s",
+                                severity=ErrorSeverity.HIGH,
+                            )
 
     def _step_env_review(self, db: Session, deployment_id: str, deployment: Deployment):
         """环境变量审核步骤 - 自动暂停等待用户确认"""

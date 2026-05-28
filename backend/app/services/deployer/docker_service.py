@@ -192,14 +192,18 @@ ENV NODE_ENV=production
 EXPOSE 3000
 {start}
 """
-        return f"""FROM node:18-alpine
+        return f"""FROM node:18-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 {install}
 COPY . .
 {build}
-EXPOSE 3000
-{start}
+RUN if [ -d dist ]; then cp -r dist /output; elif [ -d build ]; then cp -r build /output; else mkdir /output && echo "<h1>Build output not found</h1>" > /output/index.html; fi
+
+FROM nginx:alpine
+COPY --from=builder /output /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 """
 
     def _python_template(self, framework: str, start_cmd: str = None) -> str:

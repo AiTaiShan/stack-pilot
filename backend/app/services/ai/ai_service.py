@@ -309,7 +309,7 @@ class AIService:
         result = self._call_ai(messages, tools=tools, system=system_prompt)
 
         if "error" in result:
-            return {"approved": True, "reason": "AI review skipped due to error"}
+            return {"approved": None, "skipped": True, "reason": result["error"]}
 
         # 处理工具调用
         return self._process_tool_calls(result)
@@ -402,7 +402,7 @@ class AIService:
         result = self._call_ai(messages, tools=tools, system=system_prompt)
 
         if "error" in result:
-            return {"approved": True, "reason": "AI review skipped due to error"}
+            return {"approved": None, "skipped": True, "reason": result["error"]}
 
         return self._process_tool_calls(result)
 
