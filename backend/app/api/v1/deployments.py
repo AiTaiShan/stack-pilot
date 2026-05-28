@@ -6,13 +6,18 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.error_handler import AppError
 from app.models.deployment import Deployment, DeploymentStatus
+import logging
+
 from app.schemas.deployment import (
     DeploymentCreate,
     DeploymentResponse,
     DeploymentStatusResponse,
     DeploymentLogResponse,
     DeploymentLogEntry,
+    EnvVarKeysDelete,
 )
+
+logger = logging.getLogger(__name__)
 from app.services.deployer.deployment_manager import DeploymentManager
 
 router = APIRouter(prefix="/deployments", tags=["部署"])
@@ -213,3 +218,140 @@ async def delete_all_deployments(db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{deployment_id}/env-vars", response_model=dict)
+async def get_deployment_env_vars(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+):
+    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    config = deployment.config or {}
+    pending_env_vars = config.get("pending_env_vars", {})
+    confirmed = config.get("env_vars_confirmed", False)
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "pending_env_vars": pending_env_vars,
+            "confirmed": confirmed,
+            "deployment_status": deployment.status.value if deployment.status else None,
+        },
+    }
+
+
+@router.put("/{deployment_id}/env-vars", response_model=dict)
+async def update_deployment_env_vars(
+    deployment_id: str,
+    env_vars: dict,
+    db: Session = Depends(get_db),
+):
+    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    config = dict(deployment.config or {})
+    pending = config.get("pending_env_vars", {})
+
+    if not isinstance(env_vars, dict):
+        raise HTTPException(status_code=400, detail="env_vars must be a JSON object")
+
+    for k, v in env_vars.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            raise HTTPException(status_code=400, detail="keys and values must be strings")
+
+    pending.update(env_vars)
+    config["pending_env_vars"] = pending
+    deployment.config = config
+    db.commit()
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "pending_env_vars": pending,
+            "total": len(pending),
+        },
+    }
+
+
+@router.delete("/{deployment_id}/env-vars", response_model=dict)
+async def delete_deployment_env_vars(
+    deployment_id: str,
+    body: EnvVarKeysDelete,
+    db: Session = Depends(get_db),
+):
+    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    keys = body.keys
+
+    config = dict(deployment.config or {})
+    pending = config.get("pending_env_vars", {})
+
+    removed = []
+    for key in keys:
+        if key in pending:
+            del pending[key]
+            removed.append(key)
+
+    config["pending_env_vars"] = pending
+    deployment.config = config
+    db.commit()
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "removed": removed,
+            "remaining": pending,
+        },
+    }
+
+
+@router.post("/{deployment_id}/confirm-env-vars", response_model=dict)
+async def confirm_deployment_env_vars(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+    manager: DeploymentManager = Depends(get_deployment_manager),
+):
+    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    if deployment.status != DeploymentStatus.PAUSED:
+        raise HTTPException(status_code=400, detail="Deployment not in paused state")
+
+    config = dict(deployment.config or {})
+    pending_env_vars = config.get("pending_env_vars", {})
+
+    if not pending_env_vars:
+        raise HTTPException(status_code=400, detail="No pending env vars to confirm")
+
+    config["env_vars_confirmed"] = True
+    deployment.config = config
+    db.commit()
+
+    try:
+        manager._apply_confirmed_env_vars_to_compose(deployment_id)
+    except Exception as e:
+        logger.warning(f"应用环境变量到 compose 文件失败: {e}")
+
+    success = manager.resume_deployment(deployment_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to resume deployment")
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "env_vars_confirmed": True,
+            "total_env_vars": len(pending_env_vars),
+            "resumed": True,
+        },
+    }

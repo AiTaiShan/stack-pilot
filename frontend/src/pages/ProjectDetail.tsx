@@ -5,6 +5,7 @@ import type { ColumnType } from 'antd/es/table/interface'
 import { EyeOutlined, StopOutlined, RedoOutlined } from '@ant-design/icons'
 import client from '../api/client'
 import DeploymentProgress from '../components/DeploymentProgress'
+import EnvVarReviewModal from '../components/EnvVarReviewModal'
 
 const statusColors: Record<string, string> = {
   pending: 'default',
@@ -43,6 +44,8 @@ const ProjectDetail: React.FC = () => {
   const [activeDeployment, setActiveDeployment] = useState<any>(null)
   const [drawerVisible, setDrawerVisible] = useState(false)
   const [selectedDeployment, setSelectedDeployment] = useState<any>(null)
+  const [envVarModalVisible, setEnvVarModalVisible] = useState(false)
+  const [envVarDeploymentId, setEnvVarDeploymentId] = useState<string | null>(null)
 
   const fetchData = async () => {
     setLoading(true)
@@ -193,6 +196,12 @@ const ProjectDetail: React.FC = () => {
         // 同时刷新部署列表
         fetchData()
 
+        // 如果部署暂停在 env_review 步骤，自动弹出环境变量审核弹窗
+        if (updated.status === 'paused' && updated.current_step === 'env_review') {
+          setEnvVarDeploymentId(selectedDeployment.id)
+          setEnvVarModalVisible(true)
+        }
+
         // 如果部署完成或取消，停止刷新
         if (['success', 'failed', 'cancelled'].includes(updated.status)) {
           clearInterval(interval)
@@ -336,6 +345,22 @@ const ProjectDetail: React.FC = () => {
           />
         )}
       </Drawer>
+
+      {envVarDeploymentId && (
+        <EnvVarReviewModal
+          deploymentId={envVarDeploymentId}
+          open={envVarModalVisible}
+          onClose={() => {
+            setEnvVarModalVisible(false)
+            setEnvVarDeploymentId(null)
+          }}
+          onConfirmed={() => {
+            setEnvVarModalVisible(false)
+            setEnvVarDeploymentId(null)
+            fetchData()
+          }}
+        />
+      )}
     </div>
   )
 }

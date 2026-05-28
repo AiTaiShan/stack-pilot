@@ -59,3 +59,7 @@ class DeploymentLogEntry(BaseModel):
 
 class DeploymentLogResponse(BaseModel):
     logs: List[DeploymentLogEntry]
+
+
+class EnvVarKeysDelete(BaseModel):
+    keys: List[str]
