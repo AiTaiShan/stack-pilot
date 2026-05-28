@@ -219,7 +219,9 @@ class DeploymentManager:
     def _execute_step(self, db: Session, deployment_id: str, step: str, deployment: Deployment):
         step_methods = {
             DeploymentStep.CLONE.value: self._step_clone,
+            DeploymentStep.GENERATE_REVIEW.value: self._step_generate_review,
             DeploymentStep.BUILD.value: self._step_build,
+            DeploymentStep.ENV_REVIEW.value: self._step_env_review,
             DeploymentStep.PUSH.value: self._step_push,
             DeploymentStep.DEPLOY.value: self._step_deploy,
             DeploymentStep.CONFIGURE.value: self._step_configure,
@@ -781,6 +783,14 @@ class DeploymentManager:
             subprocess.run(["docker", "image", "prune", "-f"], capture_output=True, timeout=60)
         except Exception:
             pass
+
+    def _step_generate_review(self, db: Session, deployment_id: str, deployment: Deployment):
+        """占位实现 — 将在后续任务中替换为完整实现"""
+        self._log(db, deployment_id, "info", "Generate review step (placeholder)")
+
+    def _step_env_review(self, db: Session, deployment_id: str, deployment: Deployment):
+        """占位实现 — 将在后续任务中替换为完整实现"""
+        self._log(db, deployment_id, "info", "Env review step (placeholder)")
 
     def _step_build(self, db: Session, deployment_id: str, deployment: Deployment):
         import os
