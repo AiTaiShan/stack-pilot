@@ -44,6 +44,7 @@ def test_deployment_step_enum():
     assert DeploymentStep.CLONE.value == "clone"
     assert DeploymentStep.GENERATE_REVIEW.value == "generate_review"
     assert DeploymentStep.BUILD.value == "build"
+    assert DeploymentStep.ENV_REVIEW.value == "env_review"
     assert DeploymentStep.PUSH.value == "push"
     assert DeploymentStep.DEPLOY.value == "deploy"
     assert DeploymentStep.CONFIGURE.value == "configure"
