@@ -1,7 +1,13 @@
 import warnings
+import os
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
+
+# .env 文件在项目根目录: /home/project/stack-pilot/.env
+# config.py 在: backend/app/core/config.py，向上4级到 stack-pilot/
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_ENV_FILE = os.path.join(_PROJECT_ROOT, ".env")
 
 
 class Settings(BaseSettings):
@@ -31,7 +37,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4"
     LLM_BASE_URL: Optional[str] = None
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, case_sensitive=True, extra="ignore")
 
     @model_validator(mode="after")
     def check_jwt_secret(self) -> "Settings":

@@ -92,11 +92,12 @@ class AIService:
     """AI 服务 - 集成大模型"""
 
     def __init__(self, api_key: str = None, base_url: str = None):
-        # 优先使用 LLM_ 前缀的配置，兼容 AI_ 前缀
-        self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("AI_API_KEY", "")
-        self.base_url = base_url or os.getenv("LLM_BASE_URL") or os.getenv("AI_BASE_URL", "https://api.anthropic.com")
-        self.model = os.getenv("LLM_MODEL") or os.getenv("AI_MODEL", "claude-sonnet-4-20250514")
-        self.provider = os.getenv("LLM_PROVIDER", "anthropic")  # anthropic / openai / dashscope
+        from app.core.config import settings
+        # 从 settings 读取（已通过 pydantic-settings 加载 .env）
+        self.api_key = api_key or settings.LLM_API_KEY or ""
+        self.base_url = base_url or settings.LLM_BASE_URL or "https://api.anthropic.com"
+        self.model = settings.LLM_MODEL or "claude-sonnet-4-20250514"
+        self.provider = settings.LLM_PROVIDER or "openai"
         self.file_tools = FileTools()
 
     def chat(self, prompt: str, system: str = None) -> Dict[str, Any]:
