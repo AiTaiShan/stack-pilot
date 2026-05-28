@@ -805,7 +805,7 @@ class DeploymentManager:
 
         # 2. 生成部署文件
         if project_type in ("multi-module-java", "multi-module-java-with-frontend"):
-            self._generate_multi_module_files(db, deployment_id, deployment, repo_dir, project_info)
+            self._generate_multi_module_files(repo_dir, project_info)
             if project_type == "multi-module-java-with-frontend":
                 self._generate_frontend_dockerfile(repo_dir, project_info)
         elif project_type in ("microservices", "microservices-with-frontend"):
@@ -848,8 +848,7 @@ class DeploymentManager:
         if pending:
             self._log(db, deployment_id, "info", f"Saved {len(pending)} env vars for user review")
 
-    def _generate_multi_module_files(self, db: Session, deployment_id: str, deployment: Deployment,
-                                      repo_dir: str, project_info: dict):
+    def _generate_multi_module_files(self, repo_dir: str, project_info: dict):
         """生成多模块 Java 项目的 Dockerfile（使用通配符模式）"""
         import os
 
@@ -932,10 +931,10 @@ CMD ["java", "-jar", "app.jar"]
             frontend = project_info.get("frontend", {})
             if backend:
                 b_dir = os.path.join(repo_dir, backend.get("dir", "backend"))
-                self._ai_review_dockerfile(db, deployment_id, b_dir, project_info)
+                self._ai_review_dockerfile(db, deployment_id, b_dir, {**project_info, "service_name": "backend"})
             if frontend:
                 f_dir = os.path.join(repo_dir, frontend.get("dir", "frontend"))
-                self._ai_review_dockerfile(db, deployment_id, f_dir, project_info)
+                self._ai_review_dockerfile(db, deployment_id, f_dir, {**project_info, "service_name": "frontend"})
         else:
             self._ai_review_dockerfile(db, deployment_id, repo_dir, project_info)
 
@@ -945,6 +944,7 @@ CMD ["java", "-jar", "app.jar"]
         import re
 
         pending = []
+        seen = set()
         skip_dirs = {".git", "node_modules", "target", ".mvn", "__pycache__", ".stackpilot", "dist", "build"}
 
         placeholder_patterns = {
@@ -976,7 +976,8 @@ CMD ["java", "-jar", "app.jar"]
                                 for match in pattern.finditer(line):
                                     var_name = match.group(1)
                                     # 避免重复
-                                    if not any(p["name"] == var_name for p in pending):
+                                    if var_name not in seen:
+                                        seen.add(var_name)
                                         pending.append({
                                             "name": var_name,
                                             "file": os.path.relpath(filepath, repo_dir),
