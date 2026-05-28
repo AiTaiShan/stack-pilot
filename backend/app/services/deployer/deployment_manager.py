@@ -153,6 +153,7 @@ class DeploymentManager:
 
             for i in range(start_index, len(self.STEPS)):
                 step = self.STEPS[i]
+                print(f"[DEBUG] deployment {deployment_id[:8]} loop i={i} step={step}", flush=True)
 
                 if self.cancel_flags.get(deployment_id) and self.cancel_flags[deployment_id].is_set():
                     self._handle_cancellation(db, deployment_id, deployment)
@@ -165,18 +166,26 @@ class DeploymentManager:
                 deployment.current_step = DeploymentStep(step)
                 deployment.progress = self._calculate_progress(i)
                 db.commit()
+                print(f"[DEBUG] deployment {deployment_id[:8]} committed current_step={step}", flush=True)
 
                 self._log(db, deployment_id, "info", f"Starting step: {step}", step=step)
 
                 try:
+                    print(f"[DEBUG] deployment {deployment_id[:8]} executing step {step}", flush=True)
                     self._execute_step(db, deployment_id, step, deployment)
+                    print(f"[DEBUG] deployment {deployment_id[:8]} step {step} done, saving checkpoint", flush=True)
                     self._save_checkpoint(db, deployment_id, step, i, {}, [])
                     self._log(db, deployment_id, "info", f"Completed step: {step}", step=step)
+                    print(f"[DEBUG] deployment {deployment_id[:8]} step {step} fully completed", flush=True)
                 except AppError as e:
+                    print(f"[DEBUG] deployment {deployment_id[:8]} step {step} AppError: {e.message}", flush=True)
                     if e.retryable:
                         self._attempt_recovery(db, deployment_id, deployment, step, i, e)
                     else:
                         raise
+                except Exception as e:
+                    print(f"[DEBUG] deployment {deployment_id[:8]} step {step} unexpected error: {e}", flush=True)
+                    raise
 
             deployment.status = DeploymentStatus.SUCCESS
             deployment.progress = 100
@@ -788,11 +797,23 @@ class DeploymentManager:
         """生成部署文件 + AI 审核 — 将 build 步骤中的文件生成和审核提取为独立步骤"""
         import os
 
-        project_info = deployment.config or {}
-        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "")
+        self._log(db, deployment_id, "info", "Starting generate_review step")
+
+        # 刷新 deployment 对象以获取 clone 步骤写入的最新 config
+        db.refresh(deployment)
+        project_info = dict(deployment.config or {})
+        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
         project_type = project_info.get("type", "")
         deps = project_info.get("dependencies", {})
+
+        # 如果 config 中没有 dependencies，尝试从文件加载
+        if not deps:
+            deps = self._load_deps_from_file(repo_dir)
+            if deps:
+                project_info["dependencies"] = deps
+
+        self._log(db, deployment_id, "info", f"Project type: {project_type}, repo_dir: {repo_dir}")
 
         # 1. 保存依赖信息到文件
         if deps.get("external_services"):
@@ -804,6 +825,7 @@ class DeploymentManager:
                       f"External services: {', '.join(deps['external_services'])}")
 
         # 2. 生成部署文件
+        self._log(db, deployment_id, "info", f"Generating deployment files for type: {project_type}")
         if project_type in ("multi-module-java", "multi-module-java-with-frontend"):
             self._generate_multi_module_files(repo_dir, project_info)
             if project_type == "multi-module-java-with-frontend":
@@ -815,29 +837,42 @@ class DeploymentManager:
         elif project_type == "monorepo":
             self._generate_monorepo_files(repo_dir, project_info)
         else:
-            self.docker_service.generate_dockerfile(project_info, repo_dir)
+            if not os.path.exists(os.path.join(repo_dir, "Dockerfile")):
+                self.docker_service.generate_dockerfile(project_info, repo_dir)
+            else:
+                self._log(db, deployment_id, "info", "Dockerfile already exists, skipping generation")
+        self._log(db, deployment_id, "info", "Deployment files generated")
 
         # 3. AI 审核 Dockerfile(s)
+        self._log(db, deployment_id, "info", "Starting AI review of Dockerfiles")
         self._ai_review_project_dockerfiles(db, deployment_id, repo_dir, project_info)
+        self._log(db, deployment_id, "info", "AI review of Dockerfiles completed")
 
         # 4. 生成 docker-compose.yml
+        self._log(db, deployment_id, "info", "Generating docker-compose.yml")
         if project_type not in (
             "multi-module-java", "multi-module-java-with-frontend",
             "microservices", "microservices-with-frontend", "monorepo"
         ):
             if deps.get("external_services"):
                 self._generate_single_app_compose(repo_dir, repo_name, f"stackpilot/{repo_name}:latest", deps)
+        self._log(db, deployment_id, "info", "docker-compose.yml generation completed")
 
         # 5. AI 审核 docker-compose.yml
         compose_path = os.path.join(repo_dir, "docker-compose.yml")
         if os.path.exists(compose_path):
+            self._log(db, deployment_id, "info", "Starting AI review of docker-compose.yml")
             self._ai_review_compose(db, deployment_id, repo_dir, project_info, deps)
+            self._log(db, deployment_id, "info", "AI review of docker-compose.yml completed")
 
         # 6. 适配配置文件
+        self._log(db, deployment_id, "info", "Adapting config files for Docker")
         if project_info.get("config_adaptation_needed") or deps.get("external_services"):
             self._adapt_config_for_docker(repo_dir, deps)
+        self._log(db, deployment_id, "info", "Config adaptation completed")
 
         # 7. 提取环境变量
+        self._log(db, deployment_id, "info", "Extracting environment variables")
         pending = self._generate_service_env_vars(repo_dir, "spring")
         if not pending:
             pending = self._generate_service_env_vars(repo_dir, "generic")
@@ -847,6 +882,7 @@ class DeploymentManager:
         db.commit()
         if pending:
             self._log(db, deployment_id, "info", f"Saved {len(pending)} env vars for user review")
+        self._log(db, deployment_id, "info", "generate_review step completed")
 
     def _generate_multi_module_files(self, repo_dir: str, project_info: dict):
         """生成多模块 Java 项目的 Dockerfile（使用通配符模式）"""
@@ -997,8 +1033,9 @@ CMD ["java", "-jar", "app.jar"]
         """仅构建 Docker 镜像（文件生成和审核已在 generate_review 完成）"""
         import os
 
+        db.refresh(deployment)
         project_info = deployment.config or {}
-        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "")
+        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
         commit_short = deployment.commit_hash[:8] if deployment.commit_hash else "latest"
         project_type = project_info.get("type", "")
@@ -1824,7 +1861,7 @@ services:
             self._log(self.db, deployment_id, "info", "No env vars to apply")
             return True
 
-        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "")
+        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
         compose_path = os.path.join(repo_dir, "docker-compose.yml")
 
@@ -1918,6 +1955,7 @@ services:
         self.docker_service.push_image(deployment.image_tag, registry)
 
     def _step_deploy(self, db: Session, deployment_id: str, deployment: Deployment):
+        db.refresh(deployment)
         platform = deployment.platform
         if platform == "k8s":
             self._deploy_to_k8s(db, deployment)
@@ -1938,7 +1976,7 @@ services:
 
         config = deployment.config or {}
         images = config.get("images", {})
-        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "")
+        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
 
         # 检测是否有外部依赖或是否为多服务项目

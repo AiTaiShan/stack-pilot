@@ -99,9 +99,26 @@ class AIService:
         self.provider = os.getenv("LLM_PROVIDER", "anthropic")  # anthropic / openai / dashscope
         self.file_tools = FileTools()
 
+    def chat(self, prompt: str, system: str = None) -> Dict[str, Any]:
+        """简单对话接口"""
+        messages = [{"role": "user", "content": prompt}]
+        result = self._call_ai(messages, system=system)
+        if "error" in result:
+            return {"response": "", "error": result["error"]}
+        content = result.get("content", [])
+        text = ""
+        for block in content:
+            if block.get("type") == "text":
+                text += block.get("text", "")
+        return {"response": text}
+
     def _call_ai(self, messages: List[Dict], tools: List[Dict] = None, system: str = None) -> Dict:
         """调用大模型 API - 支持多种提供商"""
         import httpx
+
+        # 快速失败：API key 未配置或是占位符时直接返回错误
+        if not self.api_key or self.api_key in ("your-api-key-here", "xxx", "CHANGE_ME", ""):
+            return {"error": "LLM API key not configured"}
 
         # 根据 provider 选择调用方式
         if self.provider == "anthropic":
