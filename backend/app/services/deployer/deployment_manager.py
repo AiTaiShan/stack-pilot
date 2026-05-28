@@ -806,8 +806,12 @@ class DeploymentManager:
         # 2. 生成部署文件
         if project_type in ("multi-module-java", "multi-module-java-with-frontend"):
             self._generate_multi_module_files(db, deployment_id, deployment, repo_dir, project_info)
+            if project_type == "multi-module-java-with-frontend":
+                self._generate_frontend_dockerfile(repo_dir, project_info)
         elif project_type in ("microservices", "microservices-with-frontend"):
             self._generate_microservices_files(repo_dir, project_info)
+            if project_type == "microservices-with-frontend":
+                self._generate_frontend_dockerfile(repo_dir, project_info)
         elif project_type == "monorepo":
             self._generate_monorepo_files(repo_dir, project_info)
         else:
