@@ -32,6 +32,7 @@ class DeploymentManager:
 
     STEPS: List[str] = [
         DeploymentStep.CLONE.value,
+        DeploymentStep.GENERATE_REVIEW.value,
         DeploymentStep.BUILD.value,
         DeploymentStep.ENV_REVIEW.value,
         DeploymentStep.PUSH.value,
@@ -42,11 +43,12 @@ class DeploymentManager:
 
     STEP_PROGRESS: Dict[str, int] = {
         DeploymentStep.CLONE.value: 10,
-        DeploymentStep.BUILD.value: 40,
-        DeploymentStep.ENV_REVIEW.value: 50,
-        DeploymentStep.PUSH.value: 60,
-        DeploymentStep.DEPLOY.value: 80,
-        DeploymentStep.CONFIGURE.value: 90,
+        DeploymentStep.GENERATE_REVIEW.value: 35,
+        DeploymentStep.BUILD.value: 55,
+        DeploymentStep.ENV_REVIEW.value: 65,
+        DeploymentStep.PUSH.value: 75,
+        DeploymentStep.DEPLOY.value: 85,
+        DeploymentStep.CONFIGURE.value: 93,
         DeploymentStep.VERIFY.value: 100,
     }
 
@@ -217,6 +219,7 @@ class DeploymentManager:
     def _execute_step(self, db: Session, deployment_id: str, step: str, deployment: Deployment):
         step_methods = {
             DeploymentStep.CLONE.value: self._step_clone,
+            DeploymentStep.GENERATE_REVIEW.value: self._step_generate_review,
             DeploymentStep.BUILD.value: self._step_build,
             DeploymentStep.ENV_REVIEW.value: self._step_env_review,
             DeploymentStep.PUSH.value: self._step_push,
@@ -781,92 +784,256 @@ class DeploymentManager:
         except Exception:
             pass
 
-    def _step_build(self, db: Session, deployment_id: str, deployment: Deployment):
+    def _step_generate_review(self, db: Session, deployment_id: str, deployment: Deployment):
+        """生成部署文件 + AI 审核 — 将 build 步骤中的文件生成和审核提取为独立步骤"""
         import os
-        import subprocess
 
         project_info = deployment.config or {}
         repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "")
         repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
-        commit_short = deployment.commit_hash[:8] if deployment.commit_hash else "latest"
-
-        # 清理旧镜像，防止容器膨胀
-        self._cleanup_old_images(db, deployment_id, repo_name)
-
-        # 保存依赖信息到文件（供 docker-compose 生成使用）
+        project_type = project_info.get("type", "")
         deps = project_info.get("dependencies", {})
+
+        # 1. 保存依赖信息到文件
         if deps.get("external_services"):
             deps_dir = os.path.join(repo_dir, ".stackpilot")
             os.makedirs(deps_dir, exist_ok=True)
             with open(os.path.join(deps_dir, "dependencies.json"), "w") as f:
                 json.dump(deps, f)
-
             self._log(db, deployment_id, "info",
-                      f"External services will be added: {', '.join(deps['external_services'])}")
+                      f"External services: {', '.join(deps['external_services'])}")
 
-        project_type = project_info.get("type", "")
-        image_tag = f"stackpilot/{repo_name}:{commit_short}"
-
-        if project_type == "multi-module-java":
-            self._build_multi_module_java(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-        elif project_type == "multi-module-java-with-frontend":
-            self._build_multi_module_java(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-            self._build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-        elif project_type == "microservices":
-            self._build_microservices(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-        elif project_type == "microservices-with-frontend":
-            self._build_microservices(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-            self._build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
+        # 2. 生成部署文件
+        if project_type in ("multi-module-java", "multi-module-java-with-frontend"):
+            self._generate_multi_module_files(repo_dir, project_info)
+            if project_type == "multi-module-java-with-frontend":
+                self._generate_frontend_dockerfile(repo_dir, project_info)
+        elif project_type in ("microservices", "microservices-with-frontend"):
+            self._generate_microservices_files(repo_dir, project_info)
+            if project_type == "microservices-with-frontend":
+                self._generate_frontend_dockerfile(repo_dir, project_info)
         elif project_type == "monorepo":
-            self._build_monorepo(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
+            self._generate_monorepo_files(repo_dir, project_info)
         else:
             self.docker_service.generate_dockerfile(project_info, repo_dir)
-            self.docker_service.build_image(repo_dir, image_tag)
-            deployment.image_tag = image_tag
-            db.commit()
 
-        # 适配配置文件中的 localhost 为 Docker 服务名
-        if project_info.get("config_adaptation_needed") or deps.get("external_services"):
-            self._adapt_config_for_docker(repo_dir, deps)
+        # 3. AI 审核 Dockerfile(s)
+        self._ai_review_project_dockerfiles(db, deployment_id, repo_dir, project_info)
 
-        # 所有类型都执行 AI 审核 Dockerfile
-        self._ai_review_dockerfile(db, deployment_id, repo_dir, project_info)
-
-        # 单体项目和组合项目生成 docker-compose（包含依赖服务）
-        if project_type not in ("multi-module-java", "multi-module-java-with-frontend",
-                                 "microservices", "microservices-with-frontend", "monorepo"):
+        # 4. 生成 docker-compose.yml
+        if project_type not in (
+            "multi-module-java", "multi-module-java-with-frontend",
+            "microservices", "microservices-with-frontend", "monorepo"
+        ):
             if deps.get("external_services"):
-                self._generate_single_app_compose(repo_dir, repo_name, image_tag, deps)
+                self._generate_single_app_compose(repo_dir, repo_name, f"stackpilot/{repo_name}:latest", deps)
 
-        # 所有类型都执行 AI 审核 docker-compose.yml
+        # 5. AI 审核 docker-compose.yml
         compose_path = os.path.join(repo_dir, "docker-compose.yml")
         if os.path.exists(compose_path):
             self._ai_review_compose(db, deployment_id, repo_dir, project_info, deps)
 
-        # 保存待审核环境变量到 deployment.config
-        try:
-            pending = self._generate_service_env_vars(repo_dir, "spring")
-            if not pending:
-                pending = self._generate_service_env_vars(repo_dir, "generic")
-            dc = dict(deployment.config or {})
-            dc["pending_env_vars"] = pending
-            deployment.config = dc
-            db.commit()
-            if pending:
-                self._log(db, deployment_id, "info",
-                          f"Saved {len(pending)} env vars for user review")
-        except Exception as e:
-            self._log(db, deployment_id, "warning", f"Failed to save pending env vars: {e}")
+        # 6. 适配配置文件
+        if project_info.get("config_adaptation_needed") or deps.get("external_services"):
+            self._adapt_config_for_docker(repo_dir, deps)
+
+        # 7. 提取环境变量
+        pending = self._generate_service_env_vars(repo_dir, "spring")
+        if not pending:
+            pending = self._generate_service_env_vars(repo_dir, "generic")
+        dc = dict(deployment.config or {})
+        dc["pending_env_vars"] = pending
+        deployment.config = dc
+        db.commit()
+        if pending:
+            self._log(db, deployment_id, "info", f"Saved {len(pending)} env vars for user review")
+
+    def _generate_multi_module_files(self, repo_dir: str, project_info: dict):
+        """生成多模块 Java 项目的 Dockerfile（使用通配符模式）"""
+        import os
+
+        services = project_info.get("services", [])
+        java_version = project_info.get("java_version", 17)
+        for service in services:
+            if service["type"] == "common":
+                continue
+            service_dir = os.path.join(repo_dir, service["dir"])
+            dockerfile_content = f"""FROM eclipse-temurin:{java_version}-jre-alpine
+WORKDIR /app
+COPY target/*.jar app.jar
+EXPOSE {service['port']}
+CMD ["java", "-jar", "app.jar"]
+"""
+            dockerfile_path = os.path.join(service_dir, "Dockerfile")
+            with open(dockerfile_path, "w") as f:
+                f.write(dockerfile_content)
+
+    def _generate_microservices_files(self, repo_dir: str, project_info: dict):
+        """为微服务项目的每个服务生成 Dockerfile"""
+        import os
+
+        services = project_info.get("services", [])
+        for service in services:
+            service_dir = os.path.join(repo_dir, service["dir"])
+            dockerfile_path = os.path.join(service_dir, "Dockerfile")
+            if not os.path.exists(dockerfile_path):
+                self.docker_service.generate_dockerfile(service, service_dir)
+
+    def _generate_monorepo_files(self, repo_dir: str, project_info: dict):
+        """为 monorepo 项目的前端和后端生成 Dockerfile"""
+        import os
+
+        frontend = project_info.get("frontend", {})
+        backend = project_info.get("backend", {})
+        if backend:
+            backend_dir = os.path.join(repo_dir, backend.get("dir", "backend"))
+            self.docker_service.generate_dockerfile(backend, backend_dir)
+        if frontend:
+            frontend_dir = os.path.join(repo_dir, frontend.get("dir", "frontend"))
+            self.docker_service.generate_dockerfile(frontend, frontend_dir)
+
+    def _generate_frontend_dockerfile(self, repo_dir: str, project_info: dict):
+        """为组合项目生成前端 Dockerfile"""
+        import os
+
+        frontend_info = project_info.get("frontend", {})
+        frontend_dir_name = frontend_info.get("dir", "frontend")
+        frontend_dir = os.path.join(repo_dir, frontend_dir_name)
+        if os.path.isdir(frontend_dir):
+            self.docker_service.generate_dockerfile(frontend_info, frontend_dir)
+
+    def _ai_review_project_dockerfiles(self, db: Session, deployment_id: str, repo_dir: str, project_info: dict):
+        """扫描并 AI 审核项目中的所有 Dockerfile"""
+        import os
+
+        project_type = project_info.get("type", "")
+
+        if project_type in ("microservices", "microservices-with-frontend",
+                             "multi-module-java", "multi-module-java-with-frontend"):
+            services = project_info.get("services", [])
+            for service in services:
+                if service["type"] == "common":
+                    continue
+                service_dir = os.path.join(repo_dir, service["dir"])
+                dockerfile_path = os.path.join(service_dir, "Dockerfile")
+                if os.path.exists(dockerfile_path):
+                    self._ai_review_dockerfile(db, deployment_id, service_dir,
+                        {**project_info, "service_name": service["name"]})
+            frontend_info = project_info.get("frontend", {})
+            if frontend_info:
+                f_dir = os.path.join(repo_dir, frontend_info.get("dir", "frontend"))
+                f_df = os.path.join(f_dir, "Dockerfile")
+                if os.path.exists(f_df):
+                    self._ai_review_dockerfile(db, deployment_id, f_dir,
+                        {**project_info, "service_name": "frontend"})
+        elif project_type == "monorepo":
+            backend = project_info.get("backend", {})
+            frontend = project_info.get("frontend", {})
+            if backend:
+                b_dir = os.path.join(repo_dir, backend.get("dir", "backend"))
+                self._ai_review_dockerfile(db, deployment_id, b_dir, {**project_info, "service_name": "backend"})
+            if frontend:
+                f_dir = os.path.join(repo_dir, frontend.get("dir", "frontend"))
+                self._ai_review_dockerfile(db, deployment_id, f_dir, {**project_info, "service_name": "frontend"})
+        else:
+            self._ai_review_dockerfile(db, deployment_id, repo_dir, project_info)
+
+    def _generate_service_env_vars(self, repo_dir: str, style: str) -> list:
+        """扫描项目配置文件，提取需要用户填写的环境变量占位符"""
+        import os
+        import re
+
+        pending = []
+        seen = set()
+        skip_dirs = {".git", "node_modules", "target", ".mvn", "__pycache__", ".stackpilot", "dist", "build"}
+
+        placeholder_patterns = {
+            "spring": [
+                re.compile(r'(?:spring\.\w+(?:\.\w+)*\s*=\s*)\$\{([^}]+)\}'),
+                re.compile(r'(?:spring\.\w+(?:\.\w+)*\s*=\s*)(CHANGE_ME|TODO|xxx|your_\w+)', re.IGNORECASE),
+            ],
+            "generic": [
+                re.compile(r'(?:[A-Z_]+(?:HOST|PORT|USER|PASS|KEY|SECRET|TOKEN|URL|DSN)\s*[:=]\s*)\$\{([^}]+)\}'),
+                re.compile(r'(?:[A-Z_]+(?:HOST|PORT|USER|PASS|KEY|SECRET|TOKEN|URL|DSN)\s*[:=]\s*)(CHANGE_ME|TODO|xxx|your_\w+)', re.IGNORECASE),
+            ],
+        }
+
+        patterns = placeholder_patterns.get(style, placeholder_patterns["generic"])
+
+        for root, dirs, files in os.walk(repo_dir):
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            for filename in files:
+                if not any(filename.endswith(ext) for ext in [".properties", ".yml", ".yaml", ".env"]):
+                    continue
+                filepath = os.path.join(root, filename)
+                try:
+                    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                        for line_no, line in enumerate(f, 1):
+                            line = line.strip()
+                            if line.startswith("#") or not line:
+                                continue
+                            for pattern in patterns:
+                                for match in pattern.finditer(line):
+                                    var_name = match.group(1)
+                                    # 避免重复
+                                    if var_name not in seen:
+                                        seen.add(var_name)
+                                        pending.append({
+                                            "name": var_name,
+                                            "file": os.path.relpath(filepath, repo_dir),
+                                            "line": line_no,
+                                            "style": style,
+                                        })
+                except Exception:
+                    continue
+
+        return pending
+
+    def _step_env_review(self, db: Session, deployment_id: str, deployment: Deployment):
+        """占位实现 — 将在后续任务中替换为完整实现"""
+        self._log(db, deployment_id, "info", "Env review step (placeholder)")
+
+    def _step_build(self, db: Session, deployment_id: str, deployment: Deployment):
+        """仅构建 Docker 镜像（文件生成和审核已在 generate_review 完成）"""
+        import os
+
+        project_info = deployment.config or {}
+        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "")
+        repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
+        commit_short = deployment.commit_hash[:8] if deployment.commit_hash else "latest"
+        project_type = project_info.get("type", "")
+
+        # 清理旧镜像
+        self._cleanup_old_images(db, deployment_id, repo_name)
+
+        # 按项目类型构建镜像
+        if project_type in ("multi-module-java", "multi-module-java-with-frontend"):
+            self._build_multi_module_java(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
+            if "with-frontend" in project_type:
+                self._build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
+        elif project_type in ("microservices", "microservices-with-frontend"):
+            self._build_microservices(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
+            if "with-frontend" in project_type:
+                self._build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
+        elif project_type == "monorepo":
+            self._build_monorepo(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
+        else:
+            # 单体项目
+            image_tag = f"stackpilot/{repo_name}:{commit_short}"
+            self.docker_service.build_image(repo_dir, image_tag)
+            deployment.image_tag = image_tag
+        db.commit()
 
     def _ai_review_dockerfile(self, db: Session, deployment_id: str, repo_dir: str, project_info: dict):
-        """AI 审核 Dockerfile"""
+        """AI 审核 Dockerfile，注入完整扫描上下文"""
         import os
 
         dockerfile_path = os.path.join(repo_dir, "Dockerfile")
         if not os.path.exists(dockerfile_path):
             return
 
-        self._log(db, deployment_id, "info", "Starting AI review of Dockerfile...")
+        service_name = project_info.get("service_name", "main")
+        self._log(db, deployment_id, "info", f"AI reviewing Dockerfile in {os.path.basename(repo_dir)}...")
 
         try:
             ai_service = get_ai_service()
@@ -874,34 +1041,42 @@ class DeploymentManager:
             with open(dockerfile_path) as f:
                 dockerfile_content = f.read()
 
-            result = ai_service.review_dockerfile(dockerfile_content, project_info)
+            scan_context = {
+                "project_type": project_info.get("type", "unknown"),
+                "language": project_info.get("language", "unknown"),
+                "framework": project_info.get("framework", "unknown"),
+                "start_cmd": project_info.get("start_cmd", "N/A"),
+                "service_name": service_name,
+                "external_dependencies": project_info.get("dependencies", {}).get("external_services", []),
+            }
+            result = ai_service.review_dockerfile(dockerfile_content, scan_context)
 
             if result.get("approved"):
-                self._log(db, deployment_id, "info", "AI review: Dockerfile approved")
+                self._log(db, deployment_id, "info", f"AI approved Dockerfile ({service_name})")
             else:
                 self._log(db, deployment_id, "warning",
-                          f"AI review: Dockerfile modified - {result.get('response', '')[:200]}")
+                          f"AI modified Dockerfile ({service_name}): {result.get('response', '')[:200]}")
 
                 # 如果 AI 修改了文件，重新读取
                 if result.get("modifications"):
                     with open(dockerfile_path) as f:
                         new_content = f.read()
                     if new_content != dockerfile_content:
-                        self._log(db, deployment_id, "info", "Dockerfile has been updated by AI")
+                        self._log(db, deployment_id, "info", f"Dockerfile ({service_name}) updated by AI")
 
         except Exception as e:
             self._log(db, deployment_id, "warning", f"AI review failed (continuing): {e}")
 
     def _ai_review_compose(self, db: Session, deployment_id: str, repo_dir: str,
                            project_info: dict, deps_info: dict):
-        """AI 审核 docker-compose.yml"""
+        """AI 审核 docker-compose.yml，注入完整扫描上下文"""
         import os
 
         compose_path = os.path.join(repo_dir, "docker-compose.yml")
         if not os.path.exists(compose_path):
             return
 
-        self._log(db, deployment_id, "info", "Starting AI review of docker-compose.yml...")
+        self._log(db, deployment_id, "info", "AI reviewing docker-compose.yml...")
 
         try:
             ai_service = get_ai_service()
@@ -909,20 +1084,24 @@ class DeploymentManager:
             with open(compose_path) as f:
                 compose_content = f.read()
 
-            result = ai_service.review_docker_compose(compose_content, project_info, deps_info)
+            enhanced_deps = dict(deps_info) if deps_info else {}
+            enhanced_deps["project_type"] = project_info.get("type", "single")
+            enhanced_deps["language"] = project_info.get("language", "unknown")
+            enhanced_deps["framework"] = project_info.get("framework", "unknown")
+            result = ai_service.review_docker_compose(compose_content, project_info, enhanced_deps)
 
             if result.get("approved"):
-                self._log(db, deployment_id, "info", "AI review: docker-compose.yml approved")
+                self._log(db, deployment_id, "info", "AI approved docker-compose.yml")
             else:
                 self._log(db, deployment_id, "warning",
-                          f"AI review: docker-compose.yml modified - {result.get('response', '')[:200]}")
+                          f"AI modified compose: {result.get('response', '')[:200]}")
 
                 # 如果 AI 修改了文件，重新读取
                 if result.get("modifications"):
                     with open(compose_path) as f:
                         new_content = f.read()
                     if new_content != compose_content:
-                        self._log(db, deployment_id, "info", "docker-compose.yml has been updated by AI")
+                        self._log(db, deployment_id, "info", "docker-compose.yml updated by AI")
 
         except Exception as e:
             self._log(db, deployment_id, "warning", f"AI review failed (continuing): {e}")

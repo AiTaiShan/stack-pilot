@@ -26,7 +26,9 @@ interface LogEntry {
 
 const STEPS: StepInfo[] = [
   { key: 'clone', title: '克隆代码', description: '从 Git 仓库拉取代码' },
+  { key: 'generate_review', title: '生成部署文件', description: '生成 Dockerfile 并 AI 审核' },
   { key: 'build', title: '构建镜像', description: '构建 Docker 镜像' },
+  { key: 'env_review', title: '环境变量审核', description: '审核并确认容器环境变量' },
   { key: 'push', title: '推送镜像', description: '推送镜像到仓库' },
   { key: 'deploy', title: '部署应用', description: '部署容器到目标环境' },
   { key: 'configure', title: '配置服务', description: '配置网络和域名' },

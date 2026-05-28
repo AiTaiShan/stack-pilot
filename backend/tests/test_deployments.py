@@ -60,20 +60,15 @@ def test_calculate_progress():
 
     manager = DeploymentManager(db=MagicMock())
 
-    # step_index=0 表示还没开始任何步骤，进度为 0
-    assert manager._calculate_progress(0) == 0
-
-    # step_index=1 表示 clone 完成，进度为 10
-    assert manager._calculate_progress(1) == 10
-
-    # step_index=2 表示 build 完成，进度为 40
-    assert manager._calculate_progress(2) == 40
-
-    # step_index=5 表示 verify 完成，进度为 100
-    assert manager._calculate_progress(5) == 100
-
-    # 超出范围也返回 100
-    assert manager._calculate_progress(6) == 100
+    assert manager._calculate_progress(0) == 0     # 未开始
+    assert manager._calculate_progress(1) == 10     # clone 完成
+    assert manager._calculate_progress(2) == 35     # generate_review 完成
+    assert manager._calculate_progress(3) == 55     # build 完成
+    assert manager._calculate_progress(4) == 65     # env_review 完成
+    assert manager._calculate_progress(5) == 75     # push 完成
+    assert manager._calculate_progress(6) == 85     # deploy 完成
+    assert manager._calculate_progress(7) == 100    # verify 完成
+    assert manager._calculate_progress(8) == 100    # 超出范围
 
 
 # ========== 错误码测试 ==========
