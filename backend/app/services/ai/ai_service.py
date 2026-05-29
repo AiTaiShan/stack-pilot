@@ -331,11 +331,14 @@ class AIService:
 }}
 """
 
-        # 构建完整的用户消息 —— 包含所有扫描数据
+        # 构建消息 —— 数据直接来自 scan_data（非嵌套 detected 结构）
         structure = scan_data.get("project_structure", "")
         config_files = scan_data.get("config_files", {})
-        detected = scan_data.get("detected", {})
-        deps = detected.get("dependencies", {})
+        project_type = scan_data.get("project_type", "single")
+        language = scan_data.get("language", "unknown")
+        framework = scan_data.get("framework", "")
+        services = scan_data.get("services", [])
+        external_services = scan_data.get("external_services", [])
 
         config_content = "\n\n".join([
             f"=== {{path}} ===\n{{content}}"
@@ -354,12 +357,17 @@ class AIService:
 
 ## 检测结果
 ```json
-{json.dumps(detected, indent=2, ensure_ascii=False)[:2000]}
+{
+  "project_type": "${project_type}",
+  "language": "${language}",
+  "framework": "${framework}",
+  "services": ${json.dumps(services, indent=2, ensure_ascii=False)}
+}
 ```
 
 ## 外部依赖
 ```json
-{json.dumps(deps.get('external_services', []), indent=2, ensure_ascii=False)}
+${json.dumps(external_services, indent=2, ensure_ascii=False)}
 ```
 
 ## 关键配置文件
@@ -442,14 +450,26 @@ class AIService:
                 tool_calls_made.append({"tool": block["name"], "result": tool_result})
 
         if tool_calls_made:
-            messages.append({"role": "assistant", "content": result.get("content", [])})
-            for tc in tool_calls_made:
-                messages.append({"role": "user", "content": json.dumps(tc["result"], default=str)[:500]})
-            result2 = self._call_ai(messages, tools=tools, system=system_prompt)
-            if "error" not in result2:
-                for block in result2.get("content", []):
-                    if block.get("type") == "text":
-                        final_text += block.get("text", "")
+            # dashscope 不支持第二轮工具结果回传（第二轮会 400）
+            # 工具已经在第一轮执行完毕（文件已写入），直接扫文件系统确认结果
+            import os as _os
+            dockerfiles_found = []
+            compose_found = False
+            for root, dirs, files in _os.walk(repo_dir):
+                dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "target", ".mvn", "__pycache__"}]
+                for f in files:
+                    if f == "Dockerfile":
+                        dockerfiles_found.append(_os.path.relpath(_os.path.join(root, f), repo_dir))
+                    elif f == "docker-compose.yml":
+                        compose_found = True
+
+            final_text = json.dumps({
+                "executable_services": [service["name"] for service in services
+                                         if service.get("type") != "common" and service.get("type") != "library"],
+                "modified_files": dockerfiles_found,
+                "compose_generated": compose_found,
+                "summary": f"AI executed {len(tool_calls_made)} tool calls. Found {len(dockerfiles_found)} Dockerfiles. compose={compose_found}"
+            }, ensure_ascii=False)
 
         from json_repair import repair_json
         parsed = repair_json(final_text)
