@@ -1,4 +1,4 @@
-"""init
+"""noop placeholder
 
 Revision ID: 93f01520d7ac
 Revises: 23a9be28b342

@@ -190,6 +190,7 @@ class DeploymentManager:
                                   "completed_at": step_end.isoformat(),
                               })
                 except AppError as e:
+                    db.rollback()
                     step_end = datetime.now(timezone.utc)
                     duration_ms = int((step_end - step_start).total_seconds() * 1000)
                     if e.retryable:
@@ -207,6 +208,7 @@ class DeploymentManager:
                                   })
                         raise
                 except Exception as e:
+                    db.rollback()
                     step_end = datetime.now(timezone.utc)
                     duration_ms = int((step_end - step_start).total_seconds() * 1000)
                     self._log(db, deployment_id, "error", f"Step {step} failed: {e}", step=step,
@@ -228,6 +230,7 @@ class DeploymentManager:
             monitoring_service.record_deployment_end(deployment_id, True)
 
         except AppError as e:
+            db.rollback()
             logger.error("Deployment %s failed: %s", deployment_id, e.message)
             if deployment is not None:
                 deployment.status = DeploymentStatus.FAILED
@@ -241,6 +244,7 @@ class DeploymentManager:
             monitoring_service.record_deployment_end(deployment_id, False)
 
         except Exception as e:
+            db.rollback()
             logger.error("Deployment %s failed with unexpected error: %s", deployment_id, e)
             if deployment is not None:
                 deployment.status = DeploymentStatus.FAILED

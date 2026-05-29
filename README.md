@@ -107,10 +107,10 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 初始化数据库
 cp ../.env.example ../.env  # 首次需要
-alembic upgrade head
+.venv/bin/alembic upgrade head
 
 # 启动
-uvicorn app.main:app --reload --port 9000
+.venv/bin/uvicorn app.main:app --reload --port 9000
 ```
 
 #### 3. 前端（请使用 pnpm）

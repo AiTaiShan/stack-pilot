@@ -307,6 +307,44 @@ services:
         f.write(compose)
 
 
+def generate_microservices_compose(repo_dir: str, services: list, images: dict) -> None:
+    """生成微服务项目的 docker-compose.yml"""
+    compose = """version: '3.8'
+
+services:
+"""
+
+    for service in services:
+        name = service["name"]
+        if name not in images:
+            continue
+
+        port = service.get("port", 8080)
+        compose += f"""  {name}:
+    image: {images[name]}
+    ports:
+      - "{port}:{port}"
+"""
+        # 推断服务间依赖
+        deps = infer_service_deps(service, services)
+        if deps:
+            compose += "    depends_on:\n"
+            for dep in deps:
+                compose += f"      - {dep}\n"
+
+        compose += "\n"
+
+    # 添加外部依赖服务
+    deps = load_deps_from_file(repo_dir)
+    if deps.get("external_services"):
+        compose += generate_dependency_services(repo_dir)
+
+    logger.info("generate_microservices_compose: images=%s, services=%s, compose_preview=%s",
+                list(images.keys()), [s["name"] for s in services], compose[:300])
+    with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
+        f.write(compose)
+
+
 def infer_service_deps(service: dict, all_services: list) -> list:
     """推断服务依赖关系"""
     deps = []

@@ -1,4 +1,4 @@
-"""init
+"""create initial schema — all tables and enum types
 
 Revision ID: 23a9be28b342
 Revises: 
@@ -68,7 +68,7 @@ def upgrade() -> None:
     sa.Column('project_id', sa.UUID(), nullable=False),
     sa.Column('user_id', sa.UUID(), nullable=True),
     sa.Column('status', sa.Enum('pending', 'running', 'paused', 'cancelled', 'success', 'failed', 'rolling_back', 'rolled_back', name='deploymentstatus'), nullable=False),
-    sa.Column('current_step', sa.Enum('clone', 'build', 'push', 'deploy', 'configure', 'verify', name='deploymentstep'), nullable=True),
+    sa.Column('current_step', sa.Enum('clone', 'generate_review', 'build', 'env_review', 'push', 'deploy', 'configure', 'verify', name='deploymentstep'), nullable=True),
     sa.Column('progress', sa.Integer(), nullable=False),
     sa.Column('platform', sa.String(length=20), nullable=False),
     sa.Column('config', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
