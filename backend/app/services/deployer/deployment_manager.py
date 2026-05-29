@@ -304,8 +304,10 @@ class DeploymentManager:
         detected["dependencies"] = deps
         detect_duration_ms = int((datetime.now(timezone.utc) - detect_start).total_seconds() * 1000)
 
+        # 保存正确的 repo_dir 到 config，后续步骤直接用这个值
         config = deployment.config or {}
         config.update(detected)
+        config["_repo_dir"] = repo_dir  # 保存实际路径，避免 .lower() 导致路径错误
         deployment.config = config
         db.commit()
 
@@ -855,8 +857,11 @@ class DeploymentManager:
         # 刷新 deployment 对象以获取 clone 步骤写入的最新 config
         db.refresh(deployment)
         project_info = dict(deployment.config or {})
-        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
-        repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
+        # 优先使用 clone 步骤保存的 _repo_dir，避免 .lower() 导致路径错误
+        repo_dir = project_info.get("_repo_dir") or os.path.join(
+            self.git_service.temp_dir,
+            deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
+        )
         project_type = project_info.get("type", "")
         deps = project_info.get("dependencies", {})
 
@@ -1088,8 +1093,10 @@ CMD ["java", "-jar", "app.jar"]
 
         db.refresh(deployment)
         project_info = deployment.config or {}
-        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
-        repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
+        repo_dir = project_info.get("_repo_dir") or os.path.join(
+            self.git_service.temp_dir,
+            deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
+        )
         commit_short = deployment.commit_hash[:8] if deployment.commit_hash else "latest"
         project_type = project_info.get("type", "")
 
@@ -1990,8 +1997,10 @@ services:
             self._log(self.db, deployment_id, "info", "No env vars to apply")
             return True
 
-        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
-        repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
+        repo_dir = config.get("_repo_dir") or os.path.join(
+            self.git_service.temp_dir,
+            deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
+        )
         compose_path = os.path.join(repo_dir, "docker-compose.yml")
 
         if not os.path.exists(compose_path):
@@ -2105,8 +2114,10 @@ services:
 
         config = deployment.config or {}
         images = config.get("images", {})
-        repo_name = deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
-        repo_dir = os.path.join(self.git_service.temp_dir, repo_name)
+        repo_dir = config.get("_repo_dir") or os.path.join(
+            self.git_service.temp_dir,
+            deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
+        )
 
         # 检测是否有外部依赖或是否为多服务项目
         has_deps = bool(config.get("dependencies", {}).get("external_services"))
