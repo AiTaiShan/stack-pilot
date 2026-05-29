@@ -392,7 +392,8 @@ class DeploymentManager:
   "type": "项目类型（保持原值或修正）",
   "frontend_dir": "前端目录名（如有，否则为 null）",
   "java_version": 17,
-  "pkg_manager": "npm",
+  "framework": "spring-boot",
+              "pkg_manager": "npm",
   "config_adaptation_needed": false,
   "corrections": "修正说明"
 }}"""
@@ -427,6 +428,8 @@ class DeploymentManager:
 
             if review.get("java_version"):
                 detected["java_version"] = int(review["java_version"])
+            if review.get("framework"):
+                detected["framework"] = review["framework"]
             if review.get("pkg_manager"):
                 detected["pkg_manager"] = review["pkg_manager"]
             if review.get("config_adaptation_needed"):
@@ -1493,14 +1496,31 @@ services:
                 for key, value in service_info.env_vars.items():
                     compose += f"      - {key}={value}\n"
 
-            # 添加数据卷（数据库持久化）
+            # 添加数据卷（数据库持久化 + SQL/seed 文件挂载）
             if service_info.category == "database":
                 compose += f"    volumes:\n      - {service_name}_data:/var/lib/{service_name}\n"
+                # 检测数据库类型 + SQL 文件，通用 mount 方案
+                db_init = deps.get("database_init", {})
+                schema_files = db_init.get("schema_files", [])
+                seed_files = db_init.get("seed_files", [])
+                all_files = schema_files + seed_files
+                supported_db = ["mysql", "postgres", "mariadb"]
+                if any(k in service_name.lower() for k in supported_db):
+                    idx = 1
+                    for sf in all_files:
+                        abs_path = os.path.join(repo_dir, sf)
+                        if os.path.exists(abs_path):
+                            compose += f"      - {abs_path}:/docker-entrypoint-initdb.d/{idx:02d}-{os.path.basename(sf)}\n"
+                            idx += 1
 
-        # 添加数据库初始化服务
+        # 添加数据库初始化服务（仅当有真实迁移工具命令时）
         db_init = deps.get("database_init", {})
         init_commands = db_init.get("init_commands", [])
-        if init_commands:
+        migration_tool = db_init.get("migration_tool", "")
+        real_cmds = [c for c in init_commands
+                     if not c.startswith("#") and c.strip()
+                     and "echo" not in c and "placeholder" not in c]
+        if migration_tool and real_cmds:
             compose += self._generate_db_init_service(repo_dir, deps, init_commands)
 
         # 添加卷声明
@@ -2062,7 +2082,7 @@ services:
             self._log(self.db, deployment_id, "info", "No env vars to apply")
             return True
 
-        repo_dir = config.get("_repo_dir") or os.path.join(
+        repo_dir = getattr(deployment, "_repo_dir", "") or config.get("_repo_dir") or os.path.join(
             self.git_service.temp_dir,
             deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         )
@@ -2186,7 +2206,7 @@ services:
 
         config = deployment.config or {}
         images = config.get("images", {})
-        repo_dir = config.get("_repo_dir") or os.path.join(
+        repo_dir = getattr(deployment, "_repo_dir", "") or config.get("_repo_dir") or os.path.join(
             self.git_service.temp_dir,
             deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         )
