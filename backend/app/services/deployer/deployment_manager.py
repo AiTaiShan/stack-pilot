@@ -1743,7 +1743,30 @@ services:
 
         self._log(db, deployment_id, "info", "Maven build completed")
 
-        # 2. 为每个服务构建 Docker 镜像
+        # 2. 为每个可执行服务构建 Docker 镜像
+        # 通用检测：Spring Boot fat JAR 有 BOOT-INF，普通 JAR 有 Main-Class
+        def _is_executable_jar(jar_path: str) -> bool:
+            """检测 JAR 是否为可执行 JAR（通用方案）"""
+            import zipfile
+            try:
+                with zipfile.ZipFile(jar_path) as zf:
+                    namelist = zf.namelist()
+                    # Spring Boot fat JAR 特征
+                    if "BOOT-INF/" in namelist or "BOOT-INF/lib/" in namelist:
+                        return True
+                    # Quarkus 特征
+                    if "quarkus-app/" in namelist:
+                        return True
+                    # 检查 MANIFEST.MF 是否有 Main-Class
+                    if "META-INF/MANIFEST.MF" in namelist:
+                        manifest = zf.read("META-INF/MANIFEST.MF").decode("utf-8")
+                        if "Main-Class: " in manifest:
+                            return True
+                return False
+            except Exception:
+                # JAR 可能被损坏或不是标准 ZIP 格式
+                return False
+
         images = {}
         for service in services:
             if service["type"] == "common":
@@ -1757,13 +1780,21 @@ services:
             jar_file = None
             if os.path.exists(target_dir):
                 for f in os.listdir(target_dir):
-                    if f.endswith(".jar") and not f.endswith("-sources.jar"):
+                    if f.endswith(".jar") and not f.endswith("-sources.jar") and not f.endswith("-javadoc.jar"):
                         jar_file = f
                         break
 
             if not jar_file:
-                self._log(db, deployment_id, "warning", f"No jar found for {service_name}, skipping")
+                self._log(db, deployment_id, "info", f"No jar for {service_name}, skipping (library module)")
                 continue
+
+            # 检测是否为可执行 JAR
+            jar_path = os.path.join(target_dir, jar_file)
+            if not _is_executable_jar(jar_path):
+                self._log(db, deployment_id, "info", f"{service_name} JAR is not executable, skipping (library)")
+                continue
+
+            self._log(db, deployment_id, "info", f"{service_name} is executable, building image...")
 
             # 生成 Dockerfile
             java_version = project_info.get("java_version", 17)
