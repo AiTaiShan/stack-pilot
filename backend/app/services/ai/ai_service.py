@@ -423,12 +423,13 @@ class AIService:
         # 处理 AI 回复：收集文本 + 执行工具调用
         final_text = ""
         tool_calls_made = []
-        for block in result.get("content", []):
+        ai_content = result.get("content", [])
+        for block in ai_content:
             if block.get("type") == "text":
                 final_text += block.get("text", "")
             elif block.get("type") == "tool_use":
-                result = self._execute_tool(block["name"], block.get("input", {}))
-                tool_calls_made.append({"tool": block["name"], "result": result})
+                tool_result = self._execute_tool(block["name"], block.get("input", {}))
+                tool_calls_made.append({"tool": block["name"], "result": tool_result})
 
         if tool_calls_made:
             messages.append({"role": "assistant", "content": result.get("content", [])})
