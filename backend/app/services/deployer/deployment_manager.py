@@ -1346,6 +1346,7 @@ services:
         # 添加外部依赖服务
         compose += self._generate_dependency_services(repo_dir, services)
 
+        import logging; logging.getLogger(__name__).info("_generate_multi_module_compose: images=%s, services=%s, compose_preview=%s", list(images.keys()), [s["name"] for s in services], compose[:300])
         with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
             f.write(compose)
 
@@ -1449,6 +1450,7 @@ services:
         # 添加依赖服务配置
         compose += self._generate_dependency_services(repo_dir)
 
+        import logging; logging.getLogger(__name__).info("_generate_multi_module_compose: images=%s, services=%s, compose_preview=%s", list(images.keys()), [s["name"] for s in services], compose[:300])
         with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
             f.write(compose)
 
@@ -1917,6 +1919,7 @@ services:
         if deps.get("external_services"):
             compose += self._generate_dependency_services(repo_dir)
 
+        import logging; logging.getLogger(__name__).info("_generate_multi_module_compose: images=%s, services=%s, compose_preview=%s", list(images.keys()), [s["name"] for s in services], compose[:300])
         with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
             f.write(compose)
 
@@ -2019,6 +2022,7 @@ services:
         if deps.get("external_services"):
             compose += self._generate_dependency_services(repo_dir)
 
+        import logging; logging.getLogger(__name__).info("_generate_multi_module_compose: images=%s, services=%s, compose_preview=%s", list(images.keys()), [s["name"] for s in services], compose[:300])
         with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
             f.write(compose)
 
@@ -2064,6 +2068,7 @@ services:
         if deps.get("external_services"):
             compose += self._generate_dependency_services(repo_dir)
 
+        import logging; logging.getLogger(__name__).info("_generate_multi_module_compose: images=%s, services=%s, compose_preview=%s", list(images.keys()), [s["name"] for s in services], compose[:300])
         with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
             f.write(compose)
 
