@@ -2223,6 +2223,7 @@ services:
     def _deploy_compose_local(self, db: Session, deployment: Deployment, repo_dir: str, repo_name: str):
         """使用 docker-compose 部署 monorepo"""
         import subprocess
+        import os
 
         compose_file = os.path.join(repo_dir, "docker-compose.yml")
         if not os.path.exists(compose_file):
