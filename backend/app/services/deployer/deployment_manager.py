@@ -955,6 +955,7 @@ class DeploymentManager:
         pending = self._generate_service_env_vars(repo_dir, "spring")
         if not pending:
             pending = self._generate_service_env_vars(repo_dir, "generic")
+        import logging; logging.getLogger(__name__).info("_step_generate_review_END: deployment.config_keys=%s", list((deployment.config or {}).keys()))
         dc = dict(deployment.config or {})
         dc["pending_env_vars"] = pending
         deployment.config = dc
