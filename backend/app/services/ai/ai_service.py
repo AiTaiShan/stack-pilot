@@ -379,40 +379,40 @@ class AIService:
         ]
 
         tools = [
-            {{
+            {
                 "name": "read_file",
                 "description": "读取文件内容",
-                "input_schema": {{
+                "input_schema": {
                     "type": "object",
-                    "properties": {{
-                        "file_path": {{"type": "string", "description": "文件绝对路径"}}
-                    }},
+                    "properties": {
+                        "file_path": {"type": "string", "description": "文件绝对路径"}
+                    },
                     "required": ["file_path"]
-                }}
-            }},
-            {{
+                }
+            },
+            {
                 "name": "write_file",
                 "description": "写入文件内容",
-                "input_schema": {{
+                "input_schema": {
                     "type": "object",
-                    "properties": {{
-                        "file_path": {{"type": "string", "description": "文件绝对路径"}},
-                        "content": {{"type": "string", "description": "文件内容"}}
-                    }},
+                    "properties": {
+                        "file_path": {"type": "string", "description": "文件绝对路径"},
+                        "content": {"type": "string", "description": "文件内容"}
+                    },
                     "required": ["file_path", "content"]
-                }}
-            }},
-            {{
+                }
+            },
+            {
                 "name": "list_files",
                 "description": "列出目录中的文件",
-                "input_schema": {{
+                "input_schema": {
                     "type": "object",
-                    "properties": {{
-                        "directory": {{"type": "string", "description": "目录绝对路径"}}
-                    }},
+                    "properties": {
+                        "directory": {"type": "string", "description": "目录绝对路径"}
+                    },
                     "required": ["directory"]
-                }}
-            }}
+                }
+            }
         ]
 
         result = self._call_ai(messages, tools=tools, system=system_prompt)
