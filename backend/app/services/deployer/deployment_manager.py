@@ -153,7 +153,7 @@ class DeploymentManager:
 
             for i in range(start_index, len(self.STEPS)):
                 step = self.STEPS[i]
-                print(f"[DEBUG] deployment {deployment_id[:8]} loop i={i} step={step}", flush=True)
+                step_start = datetime.now(timezone.utc)
 
                 if self.cancel_flags.get(deployment_id) and self.cancel_flags[deployment_id].is_set():
                     self._handle_cancellation(db, deployment_id, deployment)
@@ -166,25 +166,53 @@ class DeploymentManager:
                 deployment.current_step = DeploymentStep(step)
                 deployment.progress = self._calculate_progress(i)
                 db.commit()
-                print(f"[DEBUG] deployment {deployment_id[:8]} committed current_step={step}", flush=True)
 
-                self._log(db, deployment_id, "info", f"Starting step: {step}", step=step)
+                self._log(db, deployment_id, "info", f"Starting step: {step}", step=step,
+                          details={"event": "step_start", "step": step, "timestamp": step_start.isoformat()})
 
                 try:
-                    print(f"[DEBUG] deployment {deployment_id[:8]} executing step {step}", flush=True)
                     self._execute_step(db, deployment_id, step, deployment)
-                    print(f"[DEBUG] deployment {deployment_id[:8]} step {step} done, saving checkpoint", flush=True)
+                    step_end = datetime.now(timezone.utc)
+                    duration_ms = int((step_end - step_start).total_seconds() * 1000)
                     self._save_checkpoint(db, deployment_id, step, i, {}, [])
-                    self._log(db, deployment_id, "info", f"Completed step: {step}", step=step)
-                    print(f"[DEBUG] deployment {deployment_id[:8]} step {step} fully completed", flush=True)
+                    self._log(db, deployment_id, "info", f"Completed step: {step}", step=step,
+                              details={
+                                  "event": "step_complete",
+                                  "step": step,
+                                  "duration_ms": duration_ms,
+                                  "duration_s": round(duration_ms / 1000, 2),
+                                  "started_at": step_start.isoformat(),
+                                  "completed_at": step_end.isoformat(),
+                              })
                 except AppError as e:
-                    print(f"[DEBUG] deployment {deployment_id[:8]} step {step} AppError: {e.message}", flush=True)
+                    step_end = datetime.now(timezone.utc)
+                    duration_ms = int((step_end - step_start).total_seconds() * 1000)
                     if e.retryable:
                         self._attempt_recovery(db, deployment_id, deployment, step, i, e)
                     else:
+                        self._log(db, deployment_id, "error", f"Step {step} failed: {e.message}", step=step,
+                                  details={
+                                      "event": "step_failed",
+                                      "step": step,
+                                      "error": e.message,
+                                      "error_code": e.code.value if hasattr(e.code, 'value') else str(e.code),
+                                      "retryable": e.retryable,
+                                      "duration_ms": duration_ms,
+                                      "duration_s": round(duration_ms / 1000, 2),
+                                  })
                         raise
                 except Exception as e:
-                    print(f"[DEBUG] deployment {deployment_id[:8]} step {step} unexpected error: {e}", flush=True)
+                    step_end = datetime.now(timezone.utc)
+                    duration_ms = int((step_end - step_start).total_seconds() * 1000)
+                    self._log(db, deployment_id, "error", f"Step {step} failed: {e}", step=step,
+                              details={
+                                  "event": "step_failed",
+                                  "step": step,
+                                  "error": str(e),
+                                  "error_type": type(e).__name__,
+                                  "duration_ms": duration_ms,
+                                  "duration_s": round(duration_ms / 1000, 2),
+                              })
                     raise
 
             deployment.status = DeploymentStatus.SUCCESS
@@ -248,27 +276,52 @@ class DeploymentManager:
             )
 
     def _step_clone(self, db: Session, deployment_id: str, deployment: Deployment):
+        step_start = datetime.now(timezone.utc)
+
+        # ====== Clone 仓库 ======
+        clone_start = datetime.now(timezone.utc)
         repo_dir = self.git_service.clone(deployment.git_url, branch=deployment.branch)
+        clone_duration_ms = int((datetime.now(timezone.utc) - clone_start).total_seconds() * 1000)
+        self._log(db, deployment_id, "info", f"Repository cloned ({clone_duration_ms}ms)",
+                  details={"event": "git_clone", "git_url": deployment.git_url, "branch": deployment.branch or "default",
+                           "target_dir": repo_dir, "duration_ms": clone_duration_ms})
+
+        # ====== 获取提交信息 ======
+        commit_start = datetime.now(timezone.utc)
         commit_info = self.git_service.get_latest_commit(repo_dir)
         deployment.commit_hash = commit_info["hash"]
         deployment.commit_message = commit_info["message"]
+        commit_duration_ms = int((datetime.now(timezone.utc) - commit_start).total_seconds() * 1000)
+        self._log(db, deployment_id, "info", f"Commit info: {commit_info['hash'][:12]} - {commit_info['message'][:80]}",
+                  details={"event": "git_commit", "commit_hash": commit_info["hash"],
+                           "author": commit_info.get("author_name", ""), "message": commit_info["message"],
+                           "duration_ms": commit_duration_ms})
 
-        # 自动检测项目类型
+        # ====== 检测项目类型 ======
+        detect_start = datetime.now(timezone.utc)
         detected = self._detect_project_type(repo_dir)
-
-        # 检测外部依赖
         deps = detect_project_dependencies(repo_dir)
         detected["dependencies"] = deps
+        detect_duration_ms = int((datetime.now(timezone.utc) - detect_start).total_seconds() * 1000)
 
         config = deployment.config or {}
         config.update(detected)
         deployment.config = config
         db.commit()
 
-        # 记录检测到的依赖
-        if deps.get("external_services"):
-            self._log(db, deployment_id, "info",
-                      f"Detected external services: {', '.join(deps['external_services'])}")
+        # 记录检测结果
+        self._log(db, deployment_id, "info", f"Project detected: {detected.get('type', 'single')} | {detected.get('language', 'unknown')} | {detected.get('framework', '')}",
+                  details={"event": "project_detection", "type": detected.get("type"),
+                           "language": detected.get("language"), "framework": detected.get("framework"),
+                           "services": detected.get("services", []),
+                           "external_services": deps.get("external_services", []),
+                           "duration_ms": detect_duration_ms})
+
+        step_end = datetime.now(timezone.utc)
+        step_duration_ms = int((step_end - step_start).total_seconds() * 1000)
+        logger.info("Step [clone] completed: deployment=%s duration=%dms type=%s lang=%s",
+                     deployment_id[:12], step_duration_ms,
+                     detected.get("type"), detected.get("language"))
 
     def _detect_project_type(self, repo_dir: str) -> dict:
         """检测项目类型，先用规则初筛，再交给 LLM 审核修正"""
@@ -1062,7 +1115,7 @@ CMD ["java", "-jar", "app.jar"]
         db.commit()
 
     def _ai_review_dockerfile(self, db: Session, deployment_id: str, repo_dir: str, project_info: dict):
-        """AI 审核 Dockerfile，注入完整扫描上下文"""
+        """AI 审核 Dockerfile，记录完整输入/输出"""
         import os
 
         dockerfile_path = os.path.join(repo_dir, "Dockerfile")
@@ -1070,7 +1123,7 @@ CMD ["java", "-jar", "app.jar"]
             return
 
         service_name = project_info.get("service_name", "main")
-        self._log(db, deployment_id, "info", f"AI reviewing Dockerfile in {os.path.basename(repo_dir)}...")
+        ai_start = datetime.now(timezone.utc)
 
         try:
             ai_service = get_ai_service()
@@ -1086,26 +1139,55 @@ CMD ["java", "-jar", "app.jar"]
                 "service_name": service_name,
                 "external_dependencies": project_info.get("dependencies", {}).get("external_services", []),
             }
+
+            input_info = {
+                "provider": ai_service.provider,
+                "model": ai_service.model,
+                "service": service_name,
+                "dockerfile_path": dockerfile_path,
+                "dockerfile_content": dockerfile_content,
+                "context": scan_context,
+            }
+
             result = ai_service.review_dockerfile(dockerfile_content, scan_context)
+            ai_end = datetime.now(timezone.utc)
+            ai_duration_ms = int((ai_end - ai_start).total_seconds() * 1000)
+
+            output_info = {
+                "approved": result.get("approved"),
+                "skipped": result.get("skipped"),
+                "response": result.get("response", ""),
+                "tool_calls": result.get("tool_calls", []),
+                "modifications": result.get("modifications", []),
+                "duration_ms": ai_duration_ms,
+            }
 
             if result.get("skipped"):
                 self._log(db, deployment_id, "warning",
-                          f"AI review skipped ({service_name}): {result.get('reason', 'unknown')}")
+                          f"AI review skipped ({service_name}): {result.get('reason', 'unknown')}",
+                          details={"event": "ai_review", "type": "dockerfile", "input": input_info, "output": output_info})
             elif result.get("approved"):
-                self._log(db, deployment_id, "info", f"AI approved Dockerfile ({service_name})")
+                self._log(db, deployment_id, "info", f"AI approved Dockerfile ({service_name})",
+                          details={"event": "ai_review", "type": "dockerfile", "input": input_info, "output": output_info})
             else:
                 self._log(db, deployment_id, "warning",
-                          f"AI modified Dockerfile ({service_name}): {result.get('response', '')[:200]}")
+                          f"AI modified Dockerfile ({service_name})",
+                          details={"event": "ai_review", "type": "dockerfile", "input": input_info, "output": output_info})
 
-                # 如果 AI 修改了文件，重新读取
                 if result.get("modifications"):
                     with open(dockerfile_path) as f:
                         new_content = f.read()
                     if new_content != dockerfile_content:
-                        self._log(db, deployment_id, "info", f"Dockerfile ({service_name}) updated by AI")
+                        self._log(db, deployment_id, "info", f"Dockerfile ({service_name}) updated by AI",
+                                  details={"event": "ai_modification", "type": "dockerfile", "service": service_name,
+                                           "before": dockerfile_content, "after": new_content})
 
         except Exception as e:
-            self._log(db, deployment_id, "warning", f"AI review failed (continuing): {e}")
+            ai_end = datetime.now(timezone.utc)
+            ai_duration_ms = int((ai_end - ai_start).total_seconds() * 1000)
+            self._log(db, deployment_id, "warning", f"AI review failed (continuing): {e}",
+                      details={"event": "ai_review", "type": "dockerfile", "service": service_name,
+                               "error": str(e), "duration_ms": ai_duration_ms})
 
     def _ai_review_compose(self, db: Session, deployment_id: str, repo_dir: str,
                            project_info: dict, deps_info: dict):

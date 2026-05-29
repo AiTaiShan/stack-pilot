@@ -41,6 +41,9 @@ class GitService:
             cmd.extend(["--branch", branch])
         cmd.extend([git_url, target_dir])
 
+        clone_start = datetime.now(timezone.utc)
+        logger.info("Git clone started: url=%s branch=%s target=%s", git_url, branch or "default", target_dir)
+
         try:
             result = subprocess.run(
                 cmd,
@@ -48,16 +51,26 @@ class GitService:
                 text=True,
                 timeout=120,
             )
+            clone_end = datetime.now(timezone.utc)
+            duration_ms = int((clone_end - clone_start).total_seconds() * 1000)
+            logger.info("Git clone completed: url=%s duration=%dms returncode=%d stderr=%s",
+                        git_url, duration_ms, result.returncode,
+                        result.stderr[:200] if result.stderr else "none")
+
             if result.returncode != 0:
                 self._raise_git_error(result.stderr, git_url)
         except subprocess.TimeoutExpired:
+            clone_end = datetime.now(timezone.utc)
+            duration_ms = int((clone_end - clone_start).total_seconds() * 1000)
+            logger.error("Git clone timeout: url=%s duration=%dms", git_url, duration_ms)
             raise AppError(
                 code=ErrorCode.TIMEOUT_ERROR,
-                message=f"Git clone timeout for {git_url}",
+                message=f"Git clone timeout for {git_url} ({duration_ms}ms)",
                 severity=ErrorSeverity.MEDIUM,
                 retryable=True,
             )
         except FileNotFoundError:
+            logger.error("Git command not found")
             raise AppError(
                 code=ErrorCode.NOT_FOUND,
                 message="git command not found",
@@ -71,14 +84,21 @@ class GitService:
     def list_remote_branches(self, git_url: str) -> List[str]:
         import subprocess
 
+        logger.info("Listing remote branches: url=%s", git_url)
+        start = datetime.now(timezone.utc)
         result = subprocess.run(
             ["git", "ls-remote", "--heads", git_url],
             capture_output=True,
             text=True,
             timeout=30,
         )
+        duration_ms = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
         if result.returncode != 0:
+            logger.error("List remote branches failed: url=%s duration=%dms stderr=%s",
+                         git_url, duration_ms, result.stderr[:200])
             self._raise_git_error(result.stderr, git_url)
+        logger.info("List remote branches completed: url=%s duration=%dms branches=%d",
+                     git_url, duration_ms, len(result.stdout.strip().split("\n")) if result.stdout.strip() else 0)
 
         branches = []
         for line in result.stdout.strip().split("\n"):

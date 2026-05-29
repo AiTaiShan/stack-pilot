@@ -2,6 +2,7 @@
 import os
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
@@ -121,12 +122,46 @@ class AIService:
         if not self.api_key or self.api_key in ("your-api-key-here", "xxx", "CHANGE_ME", ""):
             return {"error": "LLM API key not configured"}
 
+        # 记录 AI 请求到文件日志（截取避免日志过大）
+        req_preview = {
+            "model": self.model,
+            "provider": self.provider,
+            "system_len": len(system) if system else 0,
+            "messages_count": len(messages),
+            "tools_count": len(tools) if tools else 0,
+            "first_message_snippet": (messages[0].get("content", "")[:200] if messages else ""),
+        }
+        logger.info("AI call request: %s", json.dumps(req_preview, ensure_ascii=False, default=str))
+
+        ai_start = datetime.now(timezone.utc)
+
         # 根据 provider 选择调用方式
         if self.provider == "anthropic":
-            return self._call_anthropic(messages, tools, system)
+            result = self._call_anthropic(messages, tools, system)
         else:
-            # OpenAI 兼容接口（包括 dashscope）
-            return self._call_openai_compatible(messages, tools, system)
+            result = self._call_openai_compatible(messages, tools, system)
+
+        ai_end = datetime.now(timezone.utc)
+        ai_duration_ms = int((ai_end - ai_start).total_seconds() * 1000)
+
+        # 记录 AI 响应到文件日志
+        has_error = "error" in result
+        resp_preview = {
+            "duration_ms": ai_duration_ms,
+            "has_error": has_error,
+            "error": result.get("error") if has_error else None,
+            "content_blocks": len(result.get("content", [])),
+            "stop_reason": result.get("stop_reason"),
+        }
+        if not has_error:
+            for block in result.get("content", []):
+                if block.get("type") == "text":
+                    resp_preview["response_snippet"] = block.get("text", "")[:300]
+                    break
+        logger.info("AI call response (%dms): %s", ai_duration_ms,
+                     json.dumps(resp_preview, ensure_ascii=False, default=str))
+
+        return result
 
     def _call_anthropic(self, messages: List[Dict], tools: List[Dict] = None, system: str = None) -> Dict:
         """调用 Anthropic API"""

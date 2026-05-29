@@ -44,6 +44,9 @@ class DockerService:
                 cmd.extend(["--build-arg", f"{key}={value}"])
         cmd.append(".")
 
+        logger.info("Docker build starting: tag=%s path=%s cmd=%s", tag, path, " ".join(cmd))
+        build_start = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
+
         try:
             result = subprocess.run(
                 cmd,
@@ -52,14 +55,19 @@ class DockerService:
                 text=True,
                 timeout=600,
             )
+            build_end = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
+            duration_ms = int((build_end - build_start).total_seconds() * 1000)
+
             if result.returncode != 0:
+                logger.error("Docker build failed: tag=%s duration=%dms stderr=%s",
+                             tag, duration_ms, result.stderr[:500])
                 raise AppError(
                     code=ErrorCode.DOCKER_ERROR,
-                    message=f"Docker build failed: {result.stderr}",
+                    message=f"Docker build failed: {result.stderr[:300]}",
                     severity=ErrorSeverity.HIGH,
                     retryable=True,
                 )
-            logger.info("Successfully built image: %s", tag)
+            logger.info("Docker build completed: tag=%s duration=%dms", tag, duration_ms)
             return tag
         except subprocess.TimeoutExpired:
             raise AppError(
