@@ -2061,6 +2061,7 @@ services:
             self.git_service.temp_dir,
             deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         )
+        repo_name = os.path.basename(repo_dir.rstrip("/"))
         compose_path = os.path.join(repo_dir, "docker-compose.yml")
 
         if not os.path.exists(compose_path):
@@ -2184,6 +2185,7 @@ services:
             self.git_service.temp_dir,
             deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         )
+        repo_name = os.path.basename(repo_dir.rstrip("/"))
 
         # 检测是否有外部依赖或是否为多服务项目
         has_deps = bool(config.get("dependencies", {}).get("external_services"))
