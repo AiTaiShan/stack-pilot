@@ -967,6 +967,7 @@ class DeploymentManager:
         """生成多模块 Java 项目的 Dockerfile（使用通配符模式）"""
         import os
 
+        import logging; logging.getLogger(__name__).info("_build_multi_module_java: project_info_keys=%s, has_services=%s, project_info_type=%s", list(project_info.keys()), "services" in project_info, type(project_info).__name__)
         services = project_info.get("services", [])
         java_version = project_info.get("java_version", 17)
         for service in services:
@@ -987,6 +988,7 @@ CMD ["java", "-jar", "app.jar"]
         """为微服务项目的每个服务生成 Dockerfile"""
         import os
 
+        import logging; logging.getLogger(__name__).info("_build_multi_module_java: project_info_keys=%s, has_services=%s, project_info_type=%s", list(project_info.keys()), "services" in project_info, type(project_info).__name__)
         services = project_info.get("services", [])
         for service in services:
             service_dir = os.path.join(repo_dir, service["dir"])
@@ -1031,6 +1033,7 @@ CMD ["java", "-jar", "app.jar"]
         # 1. 收集完整项目信息
         project_info = dict(getattr(deployment, '_project_info', deployment.config or {}))
         detected = getattr(deployment, '_project_type', '') or project_info.get("type", "")
+        import logging; logging.getLogger(__name__).info("_build_multi_module_java: project_info_keys=%s, has_services=%s, project_info_type=%s", list(project_info.keys()), "services" in project_info, type(project_info).__name__)
         services = project_info.get("services", [])
         deps = project_info.get("dependencies", {}) or {}
         external_services = deps.get("external_services", [])
@@ -1281,6 +1284,7 @@ CMD ["java", "-jar", "app.jar"]
         import os
 
         project_info = deployment.config or {}
+        import logging; logging.getLogger(__name__).info("_build_multi_module_java: project_info_keys=%s, has_services=%s, project_info_type=%s", list(project_info.keys()), "services" in project_info, type(project_info).__name__)
         services = project_info.get("services", [])
         images = {}
 
@@ -1740,6 +1744,7 @@ services:
         import os
 
         project_info = deployment.config or {}
+        import logging; logging.getLogger(__name__).info("_build_multi_module_java: project_info_keys=%s, has_services=%s, project_info_type=%s", list(project_info.keys()), "services" in project_info, type(project_info).__name__)
         services = project_info.get("services", [])
 
         # 1. 先执行 Maven 整体构建
@@ -1865,6 +1870,7 @@ CMD ["java", "-jar", "app.jar"]
                     continue
 
         # 3. 生成 docker-compose.yml
+        import logging; logging.getLogger(__name__).info("PRE_COMPOSE: project_info_keys=%s, services_names=%s, images_keys=%s", list(project_info.keys()), [s["name"] for s in services], list(images.keys()))
         self._generate_multi_module_compose(repo_dir, services, images)
 
         deployment.image_tag = list(images.values())[0] if images else None
