@@ -435,6 +435,18 @@ class DeploymentManager:
             if review.get("corrections"):
                 logger.info("LLM detection correction: %s", review["corrections"])
 
+            # 如果 AI 返回了修正后的 services 列表，用它替换原有的
+            if review.get("services") and isinstance(review["services"], list):
+                corrected = False
+                for svc in detected.get("services", []):
+                    ai_svc = next((s for s in review["services"] if s.get("name") == svc["name"]), None)
+                    if ai_svc and ai_svc.get("type") != svc.get("type"):
+                        svc["type"] = ai_svc["type"](u"common" if ai_svc["type"] in ("library", "dependency", "lib", "common") else ai_svc["type"])
+                        corrected = True
+                if corrected:
+                    logger.info("Services list corrected based on AI review: %s",
+                                [(s["name"], s["type"]) for s in detected.get("services", [])])
+
         except Exception as e:
             logger.warning("LLM detection review failed, using rule-based result: %s", e)
 
@@ -2106,6 +2118,13 @@ services:
             return False
 
     def _step_push(self, db: Session, deployment_id: str, deployment: Deployment):
+        # 调试：打印 deployment.image_tag 和 config 中的 images 字段
+        import logging; _l = logging.getLogger(__name__)
+        _l.info("_step_push: image_tag=%s, project_type=%s, config_keys=%s, config_images=%s",
+                str(deployment.image_tag),
+                getattr(deployment, '_project_type', ''),
+                list((deployment.config or {}).keys())[:10],
+                list(((deployment.config or {}).get("images", {}) or {}).keys()))
         if not deployment.image_tag:
             raise AppError(
                 code=ErrorCode.DOCKER_ERROR,
