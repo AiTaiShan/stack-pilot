@@ -1740,11 +1740,12 @@ services:
             try:
                 with zipfile.ZipFile(jar_path) as zf:
                     namelist = zf.namelist()
-                    # Spring Boot fat JAR 特征
-                    if "BOOT-INF/" in namelist or "BOOT-INF/lib/" in namelist:
+                    # Spring Boot fat JAR 特征: 检查是否存在 BOOT-INF 开头的条目
+                    # 注意: ZIP 目录项可能不包含在 namelist 中，所以用 startswith 而非精确匹配
+                    if any(n.startswith("BOOT-INF/") for n in namelist):
                         return True
                     # Quarkus 特征
-                    if "quarkus-app/" in namelist:
+                    if any(n.startswith("quarkus-app/") for n in namelist):
                         return True
                     # 检查 MANIFEST.MF 是否有 Main-Class
                     if "META-INF/MANIFEST.MF" in namelist:
@@ -1752,7 +1753,7 @@ services:
                         if "Main-Class: " in manifest:
                             return True
                 return False
-            except Exception:
+            except Exception as e:
                 # JAR 可能被损坏或不是标准 ZIP 格式
                 return False
 

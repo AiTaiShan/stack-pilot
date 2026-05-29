@@ -415,6 +415,7 @@ class AIService:
             }
         ]
 
+        import logging as _log; _log.getLogger(__name__).info("review_project: about to call AI, tools=%d, messages=%d, system_len=%d", len(tools), len(messages), len(system_prompt or ''))
         # 先尝试带工具的 AI 调用
         result = self._call_ai(messages, tools=tools, system=system_prompt)
 
