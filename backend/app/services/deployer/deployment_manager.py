@@ -1398,9 +1398,9 @@ services:
                     compose += f"      - ELASTICSEARCH_HOST={service_name}\n"
                     compose += f"      - ELASTICSEARCH_PORT={service_info.default_port}\n"
 
-        # 添加初始化命令（如果有）— 真正执行迁移
+        # 添加初始化命令 — 只有真正有迁移命令时才生成 db-init
         init_commands = db_init.get("init_commands", [])
-        real_commands = [cmd for cmd in init_commands if not cmd.startswith("#")]
+        real_commands = [cmd for cmd in init_commands if not cmd.startswith("#") and "echo" not in cmd and "placeholder" not in cmd and "No migration" not in cmd]
         if real_commands:
             migration_tool = db_init.get("migration_tool", "")
             tool_images = {
