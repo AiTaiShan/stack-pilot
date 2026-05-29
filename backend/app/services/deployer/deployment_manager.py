@@ -1410,19 +1410,19 @@ services:
             }
             init_image = tool_images.get(migration_tool, "python:3.11-slim")
 
-            shell_parts = ["echo 'Waiting for database...'"]
+            shell_parts = ['echo "Waiting for database..."']
             for service_name in external_services:
                 if service_name in EXTERNAL_SERVICES:
                     service_info = EXTERNAL_SERVICES[service_name]
                     if service_info.category == "database":
                         port = service_info.default_port
                         shell_parts.append(
-                            f"for i in $(seq 1 30); do nc -z {service_name} {port} && break || sleep 2; done"
+                            f'for i in $(seq 1 30); do nc -z {service_name} {port} && break || sleep 2; done'
                         )
-            shell_parts.append("echo 'Database is ready'")
+            shell_parts.append('echo "Database is ready"')
             for cmd in real_commands:
-                shell_parts.append(f"echo 'Running: {cmd}' && {cmd}")
-            shell_parts.append("echo 'Database initialization completed'")
+                shell_parts.append(f'echo "Running: {cmd}" && {cmd}')
+            shell_parts.append('echo "Database initialization completed"')
             full_cmd = " && ".join(shell_parts)
 
             compose += f"""
