@@ -279,42 +279,146 @@ class AIService:
             "stop_reason": choice.get("finish_reason", "end_turn")
         }
 
-    def review_dockerfile(self, dockerfile_content: str, project_info: Dict) -> Dict[str, Any]:
-        """审核 Dockerfile"""
-        system_prompt = """你是一个 Docker 和容器化专家。你的任务是审核 Dockerfile 并提供改进建议。
+    def review_project(self, repo_dir: str, scan_data: Dict) -> Dict[str, Any]:
+        """
+        全面审核项目 — 一次性提供完整扫描上下文，AI 自行决定：
+        1. 哪些模块可执行 → 需要 Dockerfile
+        2. 基础镜像选什么
+        3. 是否需要修改配置文件
+        4. 是否需要 docker-compose.yml（含外部依赖）
 
-你需要检查：
-1. 基础镜像选择是否合适
-2. 安全性（是否使用 root 用户、是否有敏感信息泄露）
-3. 镜像大小优化（多阶段构建、清理缓存）
-4. 层缓存优化（依赖安装顺序）
-5. 最佳实践（COPY 顺序、EXPOSE、CMD/ENTRYPOINT）
+        Args:
+            repo_dir: 项目根目录（用作文件工具的 base_path）
+            scan_data: 完整扫描结果，包含：
+                - project_structure: 目录结构树
+                - config_files: 所有关键配置文件内容
+                - detected: 检测结果（type, language, framework, services, dependencies）
+        """
+        system_prompt = f"""你是一个 DevOps 和容器化专家，正在为一个项目做部署前的准备。
 
-你可以使用以下工具：
-- read_file: 读取文件内容
-- write_file: 写入文件内容
-- edit_json: 编辑 JSON 文件
+## 你的任务
+1. 审核当前的项目结构，判断哪些模块是**可执行服务**（有 main 方法的 Spring Boot / Quarkus / 普通 Java 应用）
+2. 只给可执行模块生成/优化 Dockerfile，依赖库模块跳过
+3. 必要时修改项目的配置文件（application.yml 等）以适应 Docker 部署
+4. 如果项目有外部依赖（MySQL、Redis 等），生成 docker-compose.yml
 
-如果 Dockerfile 有问题，直接修改文件并返回修改后的内容。
-如果没问题，返回 {"approved": true}。"""
+## 你可以使用的工具
+- `read_file(<file_path>)` — 读取文件内容
+- `write_file(<file_path>, <content>)` — 写入/修改文件
+- `list_files(<directory>)` — 列出目录内容
+
+所有文件路径是相对于项目根目录「{repo_dir}」的绝对路径。
+
+## 判断可执行模块的标准（满足任一即可）
+1. pom.xml 中有 spring-boot-maven-plugin 打包配置
+2. pom.xml 的 packaging 为 jar/war（非 pom）
+3. 有 @SpringBootApplication 注解的 main 类
+4. 构建产物（target/*.jar）是 fat JAR（有 BOOT-INF 目录）
+5. 有独立的 main 方法
+
+## 项目根目录
+{repo_dir}
+
+## 输出要求
+完成所有文件修改后，返回 JSON：
+{{
+  "executable_services": ["service1", "service2"],
+  "modified_files": ["path/to/Dockerfile", "path/to/application.yml"],
+  "compose_generated": true/false,
+  "summary": "做了什么，为什么"
+}}
+"""
+
+        # 构建完整的用户消息 —— 包含所有扫描数据
+        structure = scan_data.get("project_structure", "")
+        config_files = scan_data.get("config_files", {})
+        detected = scan_data.get("detected", {})
+        deps = detected.get("dependencies", {})
+
+        config_content = "\n\n".join([
+            f"=== {{path}} ===\n{{content}}"
+            for path, content in config_files.items()
+        ])
 
         messages = [
             {
                 "role": "user",
-                "content": f"""请审核以下 Dockerfile：
+                "content": f"""请审核以下项目，完成部署准备。
 
-```dockerfile
-{dockerfile_content}
+## 项目目录结构
+```
+{structure[:3000]}
 ```
 
-项目信息：
-- 语言: {project_info.get('language', 'unknown')}
-- 框架: {project_info.get('framework', 'unknown')}
-- 启动命令: {project_info.get('start_cmd', 'N/A')}
+## 检测结果
+```json
+{json.dumps(detected, indent=2, ensure_ascii=False)[:2000]}
+```
 
-请检查并修改，然后返回审核结果。"""
+## 外部依赖
+```json
+{json.dumps(deps.get('external_services', []), indent=2, ensure_ascii=False)}
+```
+
+## 关键配置文件
+```
+{config_content[:4000]}
+```
+
+## 操作要求
+1. 使用 list_files 探索项目结构
+2. 使用 read_file 读取 pom.xml 等关键文件，判断哪些模块可执行
+3. 为可执行模块生成/优化 Dockerfile（使用 write_file）
+4. 如果依赖 MySQL/Redis 等外部服务，生成 docker-compose.yml
+5. 修改配置文件中的连接地址（localhost → Docker 服务名）
+
+完成后返回 JSON 格式的结果。"""
             }
         ]
+
+        tools = [
+            {{
+                "name": "read_file",
+                "description": "读取文件内容",
+                "input_schema": {{
+                    "type": "object",
+                    "properties": {{
+                        "file_path": {{"type": "string", "description": "文件绝对路径"}}
+                    }},
+                    "required": ["file_path"]
+                }}
+            }},
+            {{
+                "name": "write_file",
+                "description": "写入文件内容",
+                "input_schema": {{
+                    "type": "object",
+                    "properties": {{
+                        "file_path": {{"type": "string", "description": "文件绝对路径"}},
+                        "content": {{"type": "string", "description": "文件内容"}}
+                    }},
+                    "required": ["file_path", "content"]
+                }}
+            }},
+            {{
+                "name": "list_files",
+                "description": "列出目录中的文件",
+                "input_schema": {{
+                    "type": "object",
+                    "properties": {{
+                        "directory": {{"type": "string", "description": "目录绝对路径"}}
+                    }},
+                    "required": ["directory"]
+                }}
+            }}
+        ]
+
+        result = self._call_ai(messages, tools=tools, system=system_prompt)
+
+        if "error" in result:
+            return {{"skipped": True, "reason": result["error"], "executable_services": []}}
+
+        return self._process_tool_calls(result)
 
         tools = [
             {

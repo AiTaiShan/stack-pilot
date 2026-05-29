@@ -909,8 +909,8 @@ class DeploymentManager:
 
         # 3. AI 审核 Dockerfile(s)
         self._log(db, deployment_id, "info", "Starting AI review of Dockerfiles")
-        self._ai_review_project_dockerfiles(db, deployment_id, repo_dir, project_info)
-        self._log(db, deployment_id, "info", "AI review of Dockerfiles completed")
+        self._ai_review_project(db, deployment_id, repo_dir, deployment)
+        self._log(db, deployment_id, "info", "AI review of project completed")
 
         # 4. 生成 docker-compose.yml
         self._log(db, deployment_id, "info", "Generating docker-compose.yml")
@@ -1002,41 +1002,105 @@ CMD ["java", "-jar", "app.jar"]
         if os.path.isdir(frontend_dir):
             self.docker_service.generate_dockerfile(frontend_info, frontend_dir)
 
-    def _ai_review_project_dockerfiles(self, db: Session, deployment_id: str, repo_dir: str, project_info: dict):
-        """扫描并 AI 审核项目中的所有 Dockerfile"""
-        import os
+    def _ai_review_project(self, db: Session, deployment_id: str, repo_dir: str,
+                              deployment: Deployment):
+        """
+        全项目 AI 审核 — 一次性给 AI 完整上下文，让 AI 通过工具自行决定：
+        - 哪些模块是可执行服务
+        - 生成/优化 Dockerfile
+        - 修改配置文件中 localhost 到 Docker 服务名的连接地址
+        - 生成 docker-compose.yml
+        """
+        import os, json
 
-        project_type = project_info.get("type", "")
+        # 1. 收集完整项目信息
+        project_info = dict(deployment.config or {})
+        detected = project_info.get("type", "") if hasattr(deployment, '_project_type') else getattr(deployment, '_project_type', '')
+        services = project_info.get("services", [])
+        deps = project_info.get("dependencies", {}) or {}
+        external_services = deps.get("external_services", [])
 
-        if project_type in ("microservices", "microservices-with-frontend",
-                             "multi-module-java", "multi-module-java-with-frontend"):
-            services = project_info.get("services", [])
-            for service in services:
-                if service["type"] == "common":
-                    continue
-                service_dir = os.path.join(repo_dir, service["dir"])
-                dockerfile_path = os.path.join(service_dir, "Dockerfile")
-                if os.path.exists(dockerfile_path):
-                    self._ai_review_dockerfile(db, deployment_id, service_dir,
-                        {**project_info, "service_name": service["name"]})
-            frontend_info = project_info.get("frontend", {})
-            if frontend_info:
-                f_dir = os.path.join(repo_dir, frontend_info.get("dir", "frontend"))
-                f_df = os.path.join(f_dir, "Dockerfile")
-                if os.path.exists(f_df):
-                    self._ai_review_dockerfile(db, deployment_id, f_dir,
-                        {**project_info, "service_name": "frontend"})
-        elif project_type == "monorepo":
-            backend = project_info.get("backend", {})
-            frontend = project_info.get("frontend", {})
-            if backend:
-                b_dir = os.path.join(repo_dir, backend.get("dir", "backend"))
-                self._ai_review_dockerfile(db, deployment_id, b_dir, {**project_info, "service_name": "backend"})
-            if frontend:
-                f_dir = os.path.join(repo_dir, frontend.get("dir", "frontend"))
-                self._ai_review_dockerfile(db, deployment_id, f_dir, {**project_info, "service_name": "frontend"})
-        else:
-            self._ai_review_dockerfile(db, deployment_id, repo_dir, project_info)
+        # 2. 收集结构树、配置等关键文件
+        structure = self._collect_project_structure(repo_dir, max_depth=4)
+
+        config_files = {}
+        skip_config_dirs = {".git", "node_modules", "target", ".mvn", "__pycache__", ".stackpilot", "dist", "build"}
+        for root, dirs, files in os.walk(repo_dir):
+            dirs[:] = [d for d in dirs if d not in skip_config_dirs]
+            for f in files:
+                if f in ("pom.xml", "build.gradle", "build.gradle.kts"):
+                    path = os.path.join(root, f)
+                    with open(path) as fh:
+                        config_files[os.path.relpath(path, repo_dir)] = fh.read()
+                elif f in ("application.yml", "application.yaml", "application.properties",
+                           "application-druid.yml", "application-dev.yml", "bootstrap.yml"):
+                    path = os.path.join(root, f)
+                    try:
+                        with open(path) as fh:
+                            config_files[os.path.relpath(path, repo_dir)] = fh.read()
+                    except Exception:
+                        pass
+
+        # 3. 调用 AI 进行全面审核
+        scan_report = {
+            "project_type": project_info.get("type", "single"),
+            "language": project_info.get("language", "unknown"),
+            "framework": project_info.get("framework", ""),
+            "project_structure": structure,
+            "config_files": config_files,
+            "services": services,
+            "external_services": external_services,
+        }
+
+        ai_start = datetime.now(timezone.utc)
+        self._log(db, deployment_id, "info", "Starting full project AI review with tools...")
+
+        try:
+            ai_service = get_ai_service()
+
+            # 调用 AI 服务进行全项目审核
+            result = ai_service.review_project(repo_dir, scan_report)
+            ai_end = datetime.now(timezone.utc)
+            ai_duration_ms = int((ai_end - ai_start).total_seconds() * 1000)
+
+            executable_services = result.get("executable_services", [])
+            modified_files = result.get("modified_files", [])
+            compose_generated = result.get("compose_generated", False)
+            summary = result.get("summary", "")
+
+            self._log(db, deployment_id, "info",
+                      f"AI review completed ({ai_duration_ms}ms): "
+                      f"{len(executable_services)} executable, {len(modified_files)} files modified, "
+                      f"compose={'yes' if compose_generated else 'no'}",
+                      details={
+                          "event": "ai_review",
+                          "type": "full_project",
+                          "duration_ms": ai_duration_ms,
+                          "executable_services": executable_services,
+                          "modified_files": modified_files,
+                          "compose_generated": compose_generated,
+                          "summary": summary,
+                      })
+
+            # 保存审核结果到 config
+            config = dict(deployment.config or {})
+            config["_ai_review_result"] = {
+                "executable_services": executable_services,
+                "modified_files": modified_files,
+                "compose_generated": compose_generated,
+            }
+            deployment.config = config
+            db.commit()
+
+            return result
+
+        except Exception as e:
+            ai_end = datetime.now(timezone.utc)
+            ai_duration_ms = int((ai_end - ai_start).total_seconds() * 1000)
+            self._log(db, deployment_id, "warning", f"AI review failed (continuing): {e}",
+                      details={"event": "ai_review", "type": "full_project",
+                               "error": str(e), "duration_ms": ai_duration_ms})
+            return {"executable_services": [], "modified_files": [], "compose_generated": False}
 
     def _generate_service_env_vars(self, repo_dir: str, style: str) -> list:
         """扫描项目配置文件，提取需要用户填写的环境变量占位符"""
@@ -1126,81 +1190,6 @@ CMD ["java", "-jar", "app.jar"]
             self.docker_service.build_image(repo_dir, image_tag)
             deployment.image_tag = image_tag
         db.commit()
-
-    def _ai_review_dockerfile(self, db: Session, deployment_id: str, repo_dir: str, project_info: dict):
-        """AI 审核 Dockerfile，记录完整输入/输出"""
-        import os
-
-        dockerfile_path = os.path.join(repo_dir, "Dockerfile")
-        if not os.path.exists(dockerfile_path):
-            return
-
-        service_name = project_info.get("service_name", "main")
-        ai_start = datetime.now(timezone.utc)
-
-        try:
-            ai_service = get_ai_service()
-
-            with open(dockerfile_path) as f:
-                dockerfile_content = f.read()
-
-            scan_context = {
-                "project_type": project_info.get("type", "unknown"),
-                "language": project_info.get("language", "unknown"),
-                "framework": project_info.get("framework", "unknown"),
-                "start_cmd": project_info.get("start_cmd", "N/A"),
-                "service_name": service_name,
-                "external_dependencies": project_info.get("dependencies", {}).get("external_services", []),
-            }
-
-            input_info = {
-                "provider": ai_service.provider,
-                "model": ai_service.model,
-                "service": service_name,
-                "dockerfile_path": dockerfile_path,
-                "dockerfile_content": dockerfile_content,
-                "context": scan_context,
-            }
-
-            result = ai_service.review_dockerfile(dockerfile_content, scan_context)
-            ai_end = datetime.now(timezone.utc)
-            ai_duration_ms = int((ai_end - ai_start).total_seconds() * 1000)
-
-            output_info = {
-                "approved": result.get("approved"),
-                "skipped": result.get("skipped"),
-                "response": result.get("response", ""),
-                "tool_calls": result.get("tool_calls", []),
-                "modifications": result.get("modifications", []),
-                "duration_ms": ai_duration_ms,
-            }
-
-            if result.get("skipped"):
-                self._log(db, deployment_id, "warning",
-                          f"AI review skipped ({service_name}): {result.get('reason', 'unknown')}",
-                          details={"event": "ai_review", "type": "dockerfile", "input": input_info, "output": output_info})
-            elif result.get("approved"):
-                self._log(db, deployment_id, "info", f"AI approved Dockerfile ({service_name})",
-                          details={"event": "ai_review", "type": "dockerfile", "input": input_info, "output": output_info})
-            else:
-                self._log(db, deployment_id, "warning",
-                          f"AI modified Dockerfile ({service_name})",
-                          details={"event": "ai_review", "type": "dockerfile", "input": input_info, "output": output_info})
-
-                if result.get("modifications"):
-                    with open(dockerfile_path) as f:
-                        new_content = f.read()
-                    if new_content != dockerfile_content:
-                        self._log(db, deployment_id, "info", f"Dockerfile ({service_name}) updated by AI",
-                                  details={"event": "ai_modification", "type": "dockerfile", "service": service_name,
-                                           "before": dockerfile_content, "after": new_content})
-
-        except Exception as e:
-            ai_end = datetime.now(timezone.utc)
-            ai_duration_ms = int((ai_end - ai_start).total_seconds() * 1000)
-            self._log(db, deployment_id, "warning", f"AI review failed (continuing): {e}",
-                      details={"event": "ai_review", "type": "dockerfile", "service": service_name,
-                               "error": str(e), "duration_ms": ai_duration_ms})
 
     def _ai_review_compose(self, db: Session, deployment_id: str, repo_dir: str,
                            project_info: dict, deps_info: dict):
