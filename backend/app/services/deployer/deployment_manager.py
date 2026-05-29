@@ -1718,7 +1718,7 @@ services:
         # 1. 先执行 Maven 整体构建
         self._log(db, deployment_id, "info", "Building multi-module Maven project...")
         result = subprocess.run(
-            ["mvn", "clean", "package", "-DskipTests", "-pl", ",".join([s["dir"] for s in services if s["type"] != "common"])],
+            ["mvn", "clean", "package", "-DskipTests"],
             cwd=repo_dir,
             capture_output=True,
             text=True,
@@ -1815,6 +1815,27 @@ CMD ["java", "-jar", "app.jar"]
             self.docker_service.build_image(service_dir, image_tag)
             images[service_name] = image_tag
             self._log(db, deployment_id, "info", f"Built {service_name} image: {image_tag}")
+
+        # 兜底：如果 images 为空，扫所有 target 目录找可执行 JAR
+        if not images:
+            import glob as _glob, zipfile as _zf
+            self._log(db, deployment_id, "info", "Fallback: scanning all targets for executable JARs...")
+            for jar_path in _glob.glob(os.path.join(repo_dir, "**", "target", "*.jar"), recursive=True):
+                bn = os.path.basename(jar_path)
+                if any(x in bn for x in ["-sources", "-javadoc", "-tests"]):
+                    continue
+                try:
+                    with _zf.ZipFile(jar_path) as z:
+                        if any(n.startswith("BOOT-INF/") for n in z.namelist()):
+                            mod_dir = os.path.dirname(os.path.dirname(jar_path))
+                            mod_name = os.path.basename(mod_dir)
+                            tag = f"stackpilot/{repo_name}-{mod_name}:{commit_short}"
+                            self.docker_service.build_image(mod_dir, tag)
+                            images[mod_name] = tag
+                            self._log(db, deployment_id, "info", f"Fallback built: {tag}")
+                            break
+                except Exception:
+                    continue
 
         # 3. 生成 docker-compose.yml
         self._generate_multi_module_compose(repo_dir, services, images)
