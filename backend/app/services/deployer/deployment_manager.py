@@ -1029,8 +1029,8 @@ CMD ["java", "-jar", "app.jar"]
         import os, json
 
         # 1. 收集完整项目信息
-        project_info = dict(deployment.config or {})
-        detected = project_info.get("type", "") if hasattr(deployment, '_project_type') else getattr(deployment, '_project_type', '')
+        project_info = dict(getattr(deployment, '_project_info', deployment.config or {}))
+        detected = getattr(deployment, '_project_type', '') or project_info.get("type", "")
         services = project_info.get("services", [])
         deps = project_info.get("dependencies", {}) or {}
         external_services = deps.get("external_services", [])
