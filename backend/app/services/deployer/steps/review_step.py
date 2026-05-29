@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def execute(db: Session, deployment_id: str, deployment: Deployment,
-            git_service, docker_service, ai_service, log_fn) -> None:
+            git_service, docker_service, log_fn) -> None:
     """
     生成部署文件 + AI 审核
     1. 保存依赖信息
@@ -78,7 +78,7 @@ def execute(db: Session, deployment_id: str, deployment: Deployment,
 
     # 3. AI 审核 Dockerfile(s)
     log_fn(db, deployment_id, "info", "Starting AI review of Dockerfiles")
-    _ai_review_project(db, deployment_id, repo_dir, deployment, ai_service, log_fn)
+    _ai_review_project(db, deployment_id, repo_dir, deployment, log_fn)
     log_fn(db, deployment_id, "info", "AI review of project completed")
 
     # 4. 生成 docker-compose.yml
@@ -96,7 +96,7 @@ def execute(db: Session, deployment_id: str, deployment: Deployment,
     compose_path = os.path.join(repo_dir, "docker-compose.yml")
     if os.path.exists(compose_path):
         log_fn(db, deployment_id, "info", "Starting AI review of docker-compose.yml")
-        _ai_review_compose(db, deployment_id, repo_dir, project_info, deps, ai_service, log_fn)
+        _ai_review_compose(db, deployment_id, repo_dir, project_info, deps, log_fn)
         log_fn(db, deployment_id, "info", "AI review of docker-compose.yml completed")
 
     # 6. 适配配置文件
@@ -177,7 +177,7 @@ def _generate_frontend_dockerfile(repo_dir: str, project_info: dict):
 
 
 def _ai_review_project(db: Session, deployment_id: str, repo_dir: str,
-                        deployment: Deployment, ai_service, log_fn):
+                        deployment: Deployment, log_fn):
     """
     全项目 AI 审核 — 一次性把完整上下文发给 AI，让 AI 通过工具自行决定：
     - 哪些模块是可执行服务
@@ -230,7 +230,8 @@ def _ai_review_project(db: Session, deployment_id: str, repo_dir: str,
     log_fn(db, deployment_id, "info", "Starting full project AI review with tools...")
 
     try:
-        ai_service_instance = ai_service
+        from app.services.ai.ai_service import get_ai_service
+        ai_service_instance = get_ai_service()
 
         # 调用 AI 服务进行全项目审核
         result = ai_service_instance.review_project(repo_dir, scan_report)
@@ -278,7 +279,7 @@ def _ai_review_project(db: Session, deployment_id: str, repo_dir: str,
 
 
 def _ai_review_compose(db: Session, deployment_id: str, repo_dir: str,
-                        project_info: dict, deps_info: dict, ai_service, log_fn):
+                        project_info: dict, deps_info: dict, log_fn):
     """AI 审核 docker-compose.yml，注入完整扫描上下文"""
     compose_path = os.path.join(repo_dir, "docker-compose.yml")
     if not os.path.exists(compose_path):
@@ -294,6 +295,8 @@ def _ai_review_compose(db: Session, deployment_id: str, repo_dir: str,
         enhanced_deps["project_type"] = project_info.get("type", "single")
         enhanced_deps["language"] = project_info.get("language", "unknown")
         enhanced_deps["framework"] = project_info.get("framework", "unknown")
+        from app.services.ai.ai_service import get_ai_service
+        ai_service = get_ai_service()
         result = ai_service.review_docker_compose(compose_content, project_info, enhanced_deps)
 
         if result.get("skipped"):

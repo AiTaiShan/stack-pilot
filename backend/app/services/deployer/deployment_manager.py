@@ -877,7 +877,7 @@ class DeploymentManager:
 
     def _step_generate_review(self, db: Session, deployment_id: str, deployment: Deployment):
         from app.services.deployer.steps import review_step
-        review_step.execute(db, deployment_id, deployment, self.git_service, self.docker_service, self._get_ai_service(), self._log)
+        review_step.execute(db, deployment_id, deployment, self.git_service, self.docker_service, self._log)
         return
 
         """生成部署文件 + AI 审核 — 将 build 步骤中的文件生成和审核提取为独立步骤"""
