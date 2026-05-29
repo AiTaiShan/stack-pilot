@@ -1,10 +1,12 @@
 """AI 服务 - 集成大模型进行配置审核和优化"""
 import os
+import re
 import json
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+from json_repair import repair_json as json_repair
 
 logger = logging.getLogger(__name__)
 
@@ -416,9 +418,33 @@ class AIService:
         result = self._call_ai(messages, tools=tools, system=system_prompt)
 
         if "error" in result:
-            return {{"skipped": True, "reason": result["error"], "executable_services": []}}
+            return {"skipped": True, "reason": result["error"], "executable_services": []}
 
-        return self._process_tool_calls(result)
+        # 处理 AI 回复：收集文本 + 执行工具调用
+        final_text = ""
+        tool_calls_made = []
+        for block in result.get("content", []):
+            if block.get("type") == "text":
+                final_text += block.get("text", "")
+            elif block.get("type") == "tool_use":
+                result = self._execute_tool(block["name"], block.get("input", {}))
+                tool_calls_made.append({"tool": block["name"], "result": result})
+
+        if tool_calls_made:
+            messages.append({"role": "assistant", "content": result.get("content", [])})
+            for tc in tool_calls_made:
+                messages.append({"role": "user", "content": json.dumps(tc["result"], default=str)[:500]})
+            result2 = self._call_ai(messages, tools=tools, system=system_prompt)
+            if "error" not in result2:
+                for block in result2.get("content", []):
+                    if block.get("type") == "text":
+                        final_text += block.get("text", "")
+
+        from json_repair import repair_json
+        parsed = repair_json(final_text)
+        if isinstance(parsed, dict):
+            return parsed
+        return {"executable_services": [], "modified_files": [], "compose_generated": False, "summary": final_text[:500]}
 
         tools = [
             {
