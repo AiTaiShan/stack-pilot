@@ -1425,10 +1425,12 @@ services:
             shell_parts.append('echo "Database initialization completed"')
             full_cmd = " && ".join(shell_parts)
 
+            # 使用 YAML 序列格式避免引号嵌套问题
+            esc_full_cmd = full_cmd.replace('\\"', '\\\\"')
             compose += f"""
   db-init:
     image: {init_image}
-    command: sh -c "{full_cmd}"
+    command: ["sh", "-c", \"{esc_full_cmd}\"]
     depends_on:
 """
             for service_name in external_services:
@@ -1548,7 +1550,7 @@ services:
                     )
         shell_parts.append("echo 'Database is ready'")
         for cmd in real_commands:
-            shell_parts.append(f"echo 'Running: {cmd}' && {cmd}")
+            shell_parts.append(f'echo "Running: {cmd}" && {cmd}')
         shell_parts.append("echo 'Database initialization completed'")
 
         full_cmd = " && ".join(shell_parts)
