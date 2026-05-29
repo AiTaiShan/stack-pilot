@@ -415,10 +415,19 @@ class AIService:
             }
         ]
 
+        # 先尝试带工具的 AI 调用
         result = self._call_ai(messages, tools=tools, system=system_prompt)
 
+        # 如果工具调用模式失败（dashscope 可能不支持工具调用），回退到纯文本模式
         if "error" in result:
-            return {"skipped": True, "reason": result["error"], "executable_services": []}
+            error_str = str(result["error"])
+            if "400" not in error_str and "Bad Request" not in error_str:
+                # 非工具调用错误（如 API key 无效），直接返回
+                return {"skipped": True, "reason": result["error"], "executable_services": []}
+            # 工具调用模式不支持，回退到纯文本模式（不传 tools）
+            result = self._call_ai(messages, system=system_prompt)
+            if "error" in result:
+                return {"skipped": True, "reason": result["error"], "executable_services": []}
 
         # 处理 AI 回复：收集文本 + 执行工具调用
         final_text = ""
@@ -446,40 +455,6 @@ class AIService:
         if isinstance(parsed, dict):
             return parsed
         return {"executable_services": [], "modified_files": [], "compose_generated": False, "summary": final_text[:500]}
-
-        tools = [
-            {
-                "name": "read_file",
-                "description": "读取文件内容",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "文件路径"}
-                    },
-                    "required": ["file_path"]
-                }
-            },
-            {
-                "name": "write_file",
-                "description": "写入文件内容",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "文件路径"},
-                        "content": {"type": "string", "description": "文件内容"}
-                    },
-                    "required": ["file_path", "content"]
-                }
-            }
-        ]
-
-        result = self._call_ai(messages, tools=tools, system=system_prompt)
-
-        if "error" in result:
-            return {"approved": None, "skipped": True, "reason": result["error"]}
-
-        # 处理工具调用
-        return self._process_tool_calls(result)
 
     def review_docker_compose(self, compose_content: str, project_info: Dict, deps_info: Dict) -> Dict[str, Any]:
         """审核 docker-compose.yml"""
