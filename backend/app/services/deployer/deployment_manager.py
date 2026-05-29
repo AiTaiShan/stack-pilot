@@ -276,6 +276,10 @@ class DeploymentManager:
             )
 
     def _step_clone(self, db: Session, deployment_id: str, deployment: Deployment):
+        from app.services.deployer.steps import clone_step
+        clone_step.execute(db, deployment_id, deployment, self.git_service, self._log)
+        return
+
         step_start = datetime.now(timezone.utc)
 
         # ====== Clone 仓库 ======
@@ -872,6 +876,10 @@ class DeploymentManager:
             pass
 
     def _step_generate_review(self, db: Session, deployment_id: str, deployment: Deployment):
+        from app.services.deployer.steps import review_step
+        review_step.execute(db, deployment_id, deployment, self.git_service, self.docker_service, self._get_ai_service(), self._log)
+        return
+
         """生成部署文件 + AI 审核 — 将 build 步骤中的文件生成和审核提取为独立步骤"""
         import os
 
@@ -1177,38 +1185,8 @@ CMD ["java", "-jar", "app.jar"]
         self._log(db, deployment_id, "info", "Env review step (placeholder)")
 
     def _step_build(self, db: Session, deployment_id: str, deployment: Deployment):
-        """仅构建 Docker 镜像（文件生成和审核已在 generate_review 完成）"""
-        import os
-
-        # 优先使用 Python 属性（不会被 db.commit() expire），再回退到 config
-        project_type = getattr(deployment, '_project_type', '') or (deployment.config or {}).get("type", "")
-        repo_dir = getattr(deployment, '_repo_dir', '') or os.path.join(
-            self.git_service.temp_dir,
-            deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
-        )
-        commit_short = deployment.commit_hash[:8] if deployment.commit_hash else "latest"
-        repo_name = os.path.basename(repo_dir.rstrip("/"))
-
-        # 清理旧镜像
-        self._cleanup_old_images(db, deployment_id, repo_name)
-
-        # 按项目类型构建镜像
-        if project_type in ("multi-module-java", "multi-module-java-with-frontend"):
-            self._build_multi_module_java(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-            if "with-frontend" in project_type:
-                self._build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-        elif project_type in ("microservices", "microservices-with-frontend"):
-            self._build_microservices(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-            if "with-frontend" in project_type:
-                self._build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-        elif project_type == "monorepo":
-            self._build_monorepo(db, deployment_id, deployment, repo_dir, repo_name, commit_short)
-        else:
-            # 单体项目
-            image_tag = f"stackpilot/{repo_name}:{commit_short}"
-            self.docker_service.build_image(repo_dir, image_tag)
-            deployment.image_tag = image_tag
-        db.commit()
+        from app.services.deployer.steps import build_step
+        build_step.execute(db, deployment_id, deployment, self.git_service, self.docker_service, self._log)
 
     def _ai_review_compose(self, db: Session, deployment_id: str, repo_dir: str,
                            project_info: dict, deps_info: dict):
@@ -2177,40 +2155,12 @@ services:
             return False
 
     def _step_push(self, db: Session, deployment_id: str, deployment: Deployment):
-        # 调试：打印 deployment.image_tag 和 config 中的 images 字段
-        import logging; _l = logging.getLogger(__name__)
-        _l.info("_step_push: image_tag=%s, project_type=%s, config_keys=%s, config_images=%s",
-                str(deployment.image_tag),
-                getattr(deployment, '_project_type', ''),
-                list((deployment.config or {}).keys())[:10],
-                list(((deployment.config or {}).get("images", {}) or {}).keys()))
-        if not deployment.image_tag:
-            raise AppError(
-                code=ErrorCode.DOCKER_ERROR,
-                message="No image tag available for push",
-                severity=ErrorSeverity.HIGH,
-            )
-
-        registry = (deployment.config or {}).get("registry", "")
-        if not registry:
-            self._log(db, deployment_id, "info", "No registry configured, skipping push step")
-            return
-        self.docker_service.push_image(deployment.image_tag, registry)
+        from app.services.deployer.steps import deploy_step
+        deploy_step.step_push(db, deployment_id, deployment, self.docker_service, self._log)
 
     def _step_deploy(self, db: Session, deployment_id: str, deployment: Deployment):
-        platform = deployment.platform
-        if platform == "k8s":
-            self._deploy_to_k8s(db, deployment)
-        elif platform == "coolify":
-            self._deploy_to_coolify(deployment)
-        elif platform == "local":
-            self._deploy_to_local(db, deployment)
-        else:
-            raise AppError(
-                code=ErrorCode.INVALID_PARAM,
-                message=f"Unsupported platform: {platform}",
-                severity=ErrorSeverity.HIGH,
-            )
+        from app.services.deployer.steps import deploy_step
+        deploy_step.step_deploy(db, deployment_id, deployment, self.git_service, self._log)
 
     def _deploy_to_local(self, db: Session, deployment: Deployment):
         import subprocess
@@ -2386,35 +2336,12 @@ services:
             deployment.deploy_url = data.get("fqdn", data.get("url", ""))
 
     def _step_configure(self, db: Session, deployment_id: str, deployment: Deployment):
-        config = deployment.config or {}
-        env_vars = config.get("env_vars", {})
-
-        if deployment.platform == "k8s" and env_vars:
-            self._log(db, deployment_id, "info", f"Configured {len(env_vars)} environment variables")
+        from app.services.deployer.steps import deploy_step
+        deploy_step.step_configure(db, deployment_id, deployment, self._log)
 
     def _step_verify(self, db: Session, deployment_id: str, deployment: Deployment):
-        import subprocess
-        import time
-
-        if deployment.platform == "k8s" and self.k8s_service:
-            config = deployment.config or {}
-            namespace = config.get("namespace", "default")
-            app_name = config.get("app_name", "stackpilot-app")
-
-            status = self.k8s_service.wait_for_deployment(
-                namespace=namespace,
-                name=app_name,
-                timeout=config.get("verify_timeout", 120),
-            )
-            if status["status"] != "ready":
-                raise AppError(
-                    code=ErrorCode.K8S_ERROR,
-                    message=f"Deployment verification failed: {status}",
-                    severity=ErrorSeverity.HIGH,
-                )
-        elif deployment.platform == "local":
-            self._verify_local_deployment(db, deployment)
-        self._log(db, deployment_id, "info", "Deployment verified successfully")
+        from app.services.deployer.steps import deploy_step
+        deploy_step.step_verify(db, deployment_id, deployment, self._log)
 
     def _verify_local_deployment(self, db: Session, deployment: Deployment):
         """验证本地部署：容器状态 + 端口监听 + HTTP 可达"""
