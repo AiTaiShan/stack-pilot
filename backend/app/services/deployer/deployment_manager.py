@@ -304,12 +304,20 @@ class DeploymentManager:
         detected["dependencies"] = deps
         detect_duration_ms = int((datetime.now(timezone.utc) - detect_start).total_seconds() * 1000)
 
-        # 保存正确的 repo_dir 到 config，后续步骤直接用这个值
+        # 保存到 deployment.config (JSONB)，同时也保存为 Python 普通属性
+        # 注意：db.commit() 后 SQLAlchemy 会 expire 所有 DB 属性，
+        # 但 Python 普通属性不会受影响，后续步骤可直接读取
         config = deployment.config or {}
         config.update(detected)
-        config["_repo_dir"] = repo_dir  # 保存实际路径，避免 .lower() 导致路径错误
+        config["_repo_dir"] = repo_dir
         deployment.config = config
         db.commit()
+
+        # 将检测结果保存为 Python 临时属性（不写入 DB，不会被 expire）
+        # 后续 _execute_step 方法通过同一个 Python 对象可直接访问
+        deployment._project_type = detected.get("type", "")
+        deployment._repo_dir = repo_dir
+        deployment._project_info = config
 
         # 记录检测结果
         self._log(db, deployment_id, "info", f"Project detected: {detected.get('type', 'single')} | {detected.get('language', 'unknown')} | {detected.get('framework', '')}",
@@ -854,15 +862,13 @@ class DeploymentManager:
 
         self._log(db, deployment_id, "info", "Starting generate_review step")
 
-        # 刷新 deployment 对象以获取 clone 步骤写入的最新 config
-        # 不需要 refresh，同一个 Python 对象在各步骤间共享
-        project_info = dict(deployment.config or {})
-        # 优先使用 clone 步骤保存的 _repo_dir，避免 .lower() 导致路径错误
-        repo_dir = project_info.get("_repo_dir") or os.path.join(
+        # 优先使用 Python 属性（不会因 db.commit() expire），再读 config
+        project_type = getattr(deployment, '_project_type', '') or (deployment.config or {}).get("type", "")
+        repo_dir = getattr(deployment, '_repo_dir', '') or os.path.join(
             self.git_service.temp_dir,
             deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         )
-        project_type = project_info.get("type", "")
+        project_info = dict(getattr(deployment, '_project_info', deployment.config or {}))
         deps = project_info.get("dependencies", {})
 
         # 如果 config 中没有 dependencies，尝试从文件加载
@@ -1091,14 +1097,13 @@ CMD ["java", "-jar", "app.jar"]
         """仅构建 Docker 镜像（文件生成和审核已在 generate_review 完成）"""
         import os
 
-        # 不需要 refresh，同一个 Python 对象在各步骤间共享
-        project_info = deployment.config or {}
-        repo_dir = project_info.get("_repo_dir") or os.path.join(
+        # 优先使用 Python 属性（不会被 db.commit() expire），再回退到 config
+        project_type = getattr(deployment, '_project_type', '') or (deployment.config or {}).get("type", "")
+        repo_dir = getattr(deployment, '_repo_dir', '') or os.path.join(
             self.git_service.temp_dir,
             deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
         )
         commit_short = deployment.commit_hash[:8] if deployment.commit_hash else "latest"
-        project_type = project_info.get("type", "")
         repo_name = os.path.basename(repo_dir.rstrip("/"))
 
         # 清理旧镜像
