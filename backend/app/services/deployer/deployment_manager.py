@@ -1099,6 +1099,7 @@ CMD ["java", "-jar", "app.jar"]
         )
         commit_short = deployment.commit_hash[:8] if deployment.commit_hash else "latest"
         project_type = project_info.get("type", "")
+        repo_name = os.path.basename(repo_dir.rstrip("/"))
 
         # 清理旧镜像
         self._cleanup_old_images(db, deployment_id, repo_name)
