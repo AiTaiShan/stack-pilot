@@ -28,7 +28,7 @@ class GitService:
         import subprocess
 
         if target_dir is None:
-            repo_name = git_url.rstrip("/").split("/")[-1].replace(".git", "")
+            repo_name = git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
             target_dir = os.path.join(self.temp_dir, repo_name)
 
         os.makedirs(os.path.dirname(target_dir), exist_ok=True)

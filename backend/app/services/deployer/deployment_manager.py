@@ -855,7 +855,7 @@ class DeploymentManager:
         self._log(db, deployment_id, "info", "Starting generate_review step")
 
         # 刷新 deployment 对象以获取 clone 步骤写入的最新 config
-        db.refresh(deployment)
+        # 不需要 refresh，同一个 Python 对象在各步骤间共享
         project_info = dict(deployment.config or {})
         # 优先使用 clone 步骤保存的 _repo_dir，避免 .lower() 导致路径错误
         repo_dir = project_info.get("_repo_dir") or os.path.join(
@@ -1091,7 +1091,7 @@ CMD ["java", "-jar", "app.jar"]
         """仅构建 Docker 镜像（文件生成和审核已在 generate_review 完成）"""
         import os
 
-        db.refresh(deployment)
+        # 不需要 refresh，同一个 Python 对象在各步骤间共享
         project_info = deployment.config or {}
         repo_dir = project_info.get("_repo_dir") or os.path.join(
             self.git_service.temp_dir,
@@ -2094,7 +2094,6 @@ services:
         self.docker_service.push_image(deployment.image_tag, registry)
 
     def _step_deploy(self, db: Session, deployment_id: str, deployment: Deployment):
-        db.refresh(deployment)
         platform = deployment.platform
         if platform == "k8s":
             self._deploy_to_k8s(db, deployment)
