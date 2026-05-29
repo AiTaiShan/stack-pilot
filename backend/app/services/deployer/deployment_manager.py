@@ -1533,9 +1533,11 @@ services:
         init_image = tool_images.get(migration_tool, "python:3.11-slim")
 
         # 过滤掉注释命令，构建真正要执行的命令
-        real_commands = [cmd for cmd in init_commands if not cmd.startswith("#")]
+        real_commands = [cmd for cmd in init_commands
+                        if not cmd.startswith("#") and cmd.strip()
+                        and "echo" not in cmd and "placeholder" not in cmd]
         if not real_commands:
-            real_commands = ["echo 'No migration commands to execute'"]
+            return ""
 
         # 构建 shell 命令：先等待数据库就绪，再执行迁移
         shell_parts = ["echo 'Waiting for database...'"]
@@ -1555,10 +1557,11 @@ services:
 
         full_cmd = " && ".join(shell_parts)
 
+        full_cmd_esc = full_cmd.replace('"', '\"')
         compose = f"""
   db-init:
     image: {init_image}
-    command: sh -c "{full_cmd}"
+    command: ["sh", "-c", "{full_cmd_esc}"]
     depends_on:
 """
 
