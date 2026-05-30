@@ -223,6 +223,7 @@ class DeploymentManager:
                     raise
 
             deployment.status = DeploymentStatus.SUCCESS
+            deployment.current_step = None
             deployment.progress = 100
             deployment.completed_at = datetime.now(timezone.utc)
             db.commit()
@@ -311,11 +312,11 @@ class DeploymentManager:
 
     def _step_verify(self, db: Session, deployment_id: str, deployment: Deployment):
         from app.services.deployer.steps import deploy_step
-        return
+        deploy_step.step_verify(db, deployment_id, deployment, self._log)
 
     def _step_configure(self, db: Session, deployment_id: str, deployment: Deployment):
         from app.services.deployer.steps import deploy_step
-        return
+        deploy_step.step_configure(db, deployment_id, deployment, self._log)
 
     def _step_env_review(self, db: Session, deployment_id: str, deployment: Deployment):
         """环境变量审核步骤 - 自动暂停等待用户确认"""

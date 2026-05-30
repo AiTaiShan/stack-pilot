@@ -72,6 +72,9 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({
   }
 
   const getStepStatus = (stepKey: string): 'wait' | 'process' | 'finish' | 'error' => {
+    // 部署成功 → 所有步骤标记为完成
+    if (status === 'success') return 'finish'
+
     if (!currentStep) return 'wait'
 
     const currentIdx = STEPS.findIndex((s) => s.key === currentStep)

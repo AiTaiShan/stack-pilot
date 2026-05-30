@@ -14,6 +14,51 @@ from app.core.error_handler import AppError, ErrorCode, ErrorSeverity
 logger = logging.getLogger(__name__)
 
 
+
+
+
+def _get_deploy_url_from_containers(repo_dir, repo_name):
+    """通用方案：从运行容器获取应用访问地址"""
+    import subprocess
+    import re
+    import json as _json
+
+    # 1. 从 dependencies.json 获取基础设施端口（通用，非硬编码）
+    infra_ports = set()
+    deps_file = os.path.join(repo_dir, ".stackpilot", "dependencies.json")
+    try:
+        with open(deps_file) as f:
+            deps = _json.load(f)
+        for svc_name, svc_info in deps.get("service_details", {}).items():
+            if svc_info.get("category") in ("database", "cache", "mq", "search", "storage"):
+                infra_ports.add(svc_info.get("port", 0))
+    except Exception:
+        pass
+
+    # 2. 从运行容器获取端口映射
+    project_name = f"stackpilot-{repo_name}"
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", f"name={project_name}", "--format", "{{.Names}}:{{.Ports}}"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return None
+
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            port_matches = re.findall(r'0\.0\.0\.0:(\d+)->', line)
+            for port_str in port_matches:
+                port = int(port_str)
+                if port not in infra_ports:
+                    return f"http://localhost:{port}"
+    except Exception:
+        pass
+    return None
+
+
+
 def step_push(db: Session, deployment_id: str, deployment: Deployment, docker_service, log_fn):
     """推送镜像到注册中心"""
     logger.info("_step_push: image_tag=%s, project_type=%s, config_keys=%s, config_images=%s",
@@ -132,13 +177,15 @@ def _deploy_compose_local(db: Session, deployment: Deployment, repo_dir: str, re
     subprocess.run(["docker", "volume", "prune", "-f"], capture_output=True, timeout=30)
 
     config = deployment.config or {}
-    frontend_port = config.get("frontend", {}).get("port", 3000)
-    backend_port = config.get("backend", {}).get("port", 8000)
+    config = deployment.config or {}
+    deploy_url = _get_deploy_url_from_containers(repo_dir, repo_name)
+    if deploy_url:
+        deployment.deploy_url = deploy_url
+        db.commit()
+        log_fn(db, str(deployment.id), "info", f"Deployed via docker-compose. Service: {deploy_url}")
+    else:
+        log_fn(db, str(deployment.id), "warning", "Deploy succeeded but no accessible service found")
 
-    deployment.deploy_url = f"http://localhost:{frontend_port}"
-    db.commit()
-    log_fn(db, str(deployment.id), "info",
-           f"Deployed via docker-compose. Frontend: http://localhost:{frontend_port}, Backend: http://localhost:{backend_port}")
 
 
 def _deploy_to_k8s(db: Session, deployment: Deployment, log_fn):
