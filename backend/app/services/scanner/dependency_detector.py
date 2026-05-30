@@ -1011,7 +1011,29 @@ def detect_project_dependencies(repo_dir: str) -> Dict[str, Any]:
     result = detector.detect_all()
     # 补充版本检测
     result["service_versions"] = detect_service_versions(repo_dir)
+    # 补充应用端口检测
+    result["app_port"] = detect_app_port(repo_dir)
     return result
+
+
+def detect_app_port(repo_dir: str) -> int:
+    """通用端口检测：从应用配置中读取实际运行端口"""
+    for root, dirs, files in os.walk(repo_dir):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "target", ".mvn", "__pycache__"}]
+        for f in files:
+            if f in ("application.yml", "application.yaml"):
+                try:
+                    with open(os.path.join(root, f)) as fh:
+                        content = fh.read()
+                    match = re.search(r'\bport:\s*(\d+)', content, re.MULTILINE)
+                    if match:
+                        port = int(match.group(1))
+                        if 0 < port < 65536:
+                            logger.info(f"Detected app port from {f}: {port}")
+                            return port
+                except Exception:
+                    continue
+    return 8080  # 默认端口
 
 
 def detect_service_versions(repo_dir: str) -> Dict[str, str]:

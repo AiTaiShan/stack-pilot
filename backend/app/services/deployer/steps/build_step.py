@@ -219,8 +219,9 @@ CMD ["java", "-jar", "app.jar"]
             except Exception:
                 continue
 
-    # 3. 生成 docker-compose.yml
-    generate_multi_module_compose(repo_dir, services, images)
+    # 3. 生成 docker-compose.yml（传入检测到的版本信息）
+    service_versions = project_info.get("_service_versions", {})
+    generate_multi_module_compose(repo_dir, services, images, service_versions)
 
     deployment.image_tag = list(images.values())[0] if images else None
     deployment.config = {**project_info, "images": images, "compose": True}
@@ -326,7 +327,7 @@ services:
     # 添加外部依赖服务
     deps = load_deps_from_file(repo_dir)
     if deps.get("external_services"):
-        compose += generate_dependency_services(repo_dir)
+        compose += generate_dependency_services(repo_dir, service_versions=service_versions)
 
     with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
         f.write(compose)
