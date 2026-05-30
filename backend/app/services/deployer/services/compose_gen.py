@@ -1,12 +1,59 @@
 """compose_gen.py — Docker Compose 文件生成服务"""
 import json
 import os
+import re
 import logging
 from typing import Dict, List, Optional, Any
 
 from app.services.scanner.dependency_detector import EXTERNAL_SERVICES
 
 logger = logging.getLogger(__name__)
+
+
+def _read_app_db_password(repo_dir: str, service_name: str) -> Optional[str]:
+    """
+    从应用配置文件中读取数据库密码
+    支持 application.yml, application-druid.yml, .env 等格式
+    """
+    # 搜索常见的配置文件
+    config_files = []
+    for root, dirs, files in os.walk(repo_dir):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "target", ".mvn", "__pycache__"}]
+        for f in files:
+            if f in ("application.yml", "application.yaml", "application.properties",
+                     "application-druid.yml", "application-prod.yml", ".env"):
+                config_files.append(os.path.join(root, f))
+
+    # MySQL 密码正则
+    mysql_patterns = [
+        r'password:\s*["\']?([^"\'\s]+)',  # YAML: password: xxx
+        r'MYSQL_PASSWORD[=:]\s*["\']?([^"\'\s]+)',  # .env: MYSQL_PASSWORD=xxx
+        r'MYSQL_ROOT_PASSWORD[=:]\s*["\']?([^"\'\s]+)',
+        r'mysql.*password[=:]\s*["\']?([^"\'\s]+)',  # 通用
+    ]
+
+    # PostgreSQL 密码正则
+    pg_patterns = [
+        r'POSTGRES_PASSWORD[=:]\s*["\']?([^"\'\s]+)',
+        r'postgresql.*password[=:]\s*["\']?([^"\'\s]+)',
+    ]
+
+    patterns = mysql_patterns if service_name == "mysql" else pg_patterns
+
+    for filepath in config_files:
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            for pattern in patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                if matches:
+                    password = matches[0].strip()
+                    if password and password not in ("${...}", "${...}", "xxx", "your_password", "CHANGE_ME"):
+                        return password
+        except Exception:
+            continue
+
+    return None
 
 
 def generate_single_app_compose(repo_dir: str, repo_name: str, image_tag: str, deps: dict) -> None:
@@ -149,10 +196,16 @@ def generate_dependency_services(repo_dir: str, app_services: list = None) -> st
       - "{port}:{port}"
 """
 
-        # 添加环境变量
+        # 添加环境变量 - 同步应用配置中的数据库密码
         if service_info.env_vars:
             compose += "    environment:\n"
             for key, value in service_info.env_vars.items():
+                # 自动读取应用配置中的数据库密码，确保密码一致
+                if key in ("MYSQL_ROOT_PASSWORD", "POSTGRES_PASSWORD", "MONGO_INITDB_ROOT_PASSWORD", "ORACLE_PWD", "SA_PASSWORD"):
+                    app_password = _read_app_db_password(repo_dir, service_name)
+                    if app_password:
+                        value = app_password
+                        logger.info(f"Synced {key} from app config: {value[:3]}***")
                 compose += f"      - {key}={value}\n"
 
         # 添加数据卷（数据库持久化 + SQL/seed 文件挂载）
