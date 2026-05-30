@@ -3,19 +3,19 @@ import json
 import os
 import re
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 from app.services.scanner.dependency_detector import EXTERNAL_SERVICES
 
 logger = logging.getLogger(__name__)
 
 
-def _read_app_db_password(repo_dir: str, service_name: str) -> Optional[str]:
+def _read_app_db_config(repo_dir: str, service_name: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    从应用配置文件中读取数据库密码
+    从应用配置文件中读取数据库密码和数据库名
+    返回 (password, database_name)
     支持 application.yml, application-druid.yml, .env 等格式
     """
-    # 搜索常见的配置文件
     config_files = []
     for root, dirs, files in os.walk(repo_dir):
         dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "target", ".mvn", "__pycache__"}]
@@ -24,19 +24,34 @@ def _read_app_db_password(repo_dir: str, service_name: str) -> Optional[str]:
                      "application-druid.yml", "application-prod.yml", ".env"):
                 config_files.append(os.path.join(root, f))
 
-    # MySQL 密码正则
-    mysql_patterns = [
-        r'password:\s*["\']?([^"\'\s]+)',  # YAML: password: xxx
-        r'MYSQL_PASSWORD[=:]\s*["\']?([^"\'\s]+)',  # .env: MYSQL_PASSWORD=xxx
-        r'MYSQL_ROOT_PASSWORD[=:]\s*["\']?([^"\'\s]+)',
-        r'mysql.*password[=:]\s*["\']?([^"\'\s]+)',  # 通用
-    ]
+    password = None
+    database = None
 
-    # PostgreSQL 密码正则
-    pg_patterns = [
-        r'POSTGRES_PASSWORD[=:]\s*["\']?([^"\'\s]+)',
-        r'postgresql.*password[=:]\s*["\']?([^"\'\s]+)',
-    ]
+    # MySQL 配置正则
+    mysql_patterns = {
+        "password": [
+            r'password:\s*["\']?([^"\'\s]+)',
+            r'MYSQL_PASSWORD[=:]\s*["\']?([^"\'\s]+)',
+            r'MYSQL_ROOT_PASSWORD[=:]\s*["\']?([^"\'\s]+)',
+        ],
+        "database": [
+            r'MYSQL_DATABASE[=:]\s*["\']?([^"\'\s]+)',
+            r'mysql.*database[=:]\s*["\']?([^"\'\s]+)',
+            r'jdbc:mysql://[^/]+/([^?\s"\']+)',  # JDBC URL: jdbc:mysql://host:port/DBNAME
+        ]
+    }
+
+    # PostgreSQL 配置正则
+    pg_patterns = {
+        "password": [
+            r'POSTGRES_PASSWORD[=:]\s*["\']?([^"\'\s]+)',
+            r'postgresql.*password[=:]\s*["\']?([^"\'\s]+)',
+        ],
+        "database": [
+            r'POSTGRES_DB[=:]\s*["\']?([^"\'\s]+)',
+            r'jdbc:postgresql://[^/]+/([^?\s"\']+)',
+        ]
+    }
 
     patterns = mysql_patterns if service_name == "mysql" else pg_patterns
 
@@ -44,16 +59,30 @@ def _read_app_db_password(repo_dir: str, service_name: str) -> Optional[str]:
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-            for pattern in patterns:
-                matches = re.findall(pattern, content, re.IGNORECASE)
-                if matches:
-                    password = matches[0].strip()
-                    if password and password not in ("${...}", "${...}", "xxx", "your_password", "CHANGE_ME"):
-                        return password
+
+            # 读取密码
+            if not password:
+                for pattern in patterns["password"]:
+                    matches = re.findall(pattern, content, re.IGNORECASE)
+                    if matches:
+                        p = matches[0].strip()
+                        if p and p not in ("${...}", "${...}", "xxx", "your_password", "CHANGE_ME"):
+                            password = p
+                            break
+
+            # 读取数据库名
+            if not database:
+                for pattern in patterns["database"]:
+                    matches = re.findall(pattern, content, re.IGNORECASE)
+                    if matches:
+                        db = matches[0].strip()
+                        if db and db not in ("${...}", "${...}", "xxx", "your_db", "CHANGE_ME"):
+                            database = db
+                            break
         except Exception:
             continue
 
-    return None
+    return password, database
 
 
 def generate_single_app_compose(repo_dir: str, repo_name: str, image_tag: str, deps: dict) -> None:
@@ -196,16 +225,21 @@ def generate_dependency_services(repo_dir: str, app_services: list = None) -> st
       - "{port}:{port}"
 """
 
-        # 添加环境变量 - 同步应用配置中的数据库密码
+        # 添加环境变量 - 自动读取应用配置中的数据库密码和库名
         if service_info.env_vars:
+            app_password, app_database = _read_app_db_config(repo_dir, service_name)
             compose += "    environment:\n"
             for key, value in service_info.env_vars.items():
-                # 自动读取应用配置中的数据库密码，确保密码一致
+                # 同步应用配置中的数据库密码
                 if key in ("MYSQL_ROOT_PASSWORD", "POSTGRES_PASSWORD", "MONGO_INITDB_ROOT_PASSWORD", "ORACLE_PWD", "SA_PASSWORD"):
-                    app_password = _read_app_db_password(repo_dir, service_name)
                     if app_password:
                         value = app_password
                         logger.info(f"Synced {key} from app config: {value[:3]}***")
+                # 同步应用配置中的数据库名
+                if key in ("MYSQL_DATABASE", "POSTGRES_DB", "MONGO_INITDB_DATABASE"):
+                    if app_database:
+                        value = app_database
+                        logger.info(f"Synced {key} from app config: {value}")
                 compose += f"      - {key}={value}\n"
 
         # 添加数据卷（数据库持久化 + SQL/seed 文件挂载）
