@@ -27,12 +27,12 @@ def _read_app_db_config(repo_dir: str, service_name: str) -> Tuple[Optional[str]
     password = None
     database = None
 
-    # MySQL 配置正则
+    # MySQL 配置正则 - 只匹配同行的值（不跨行）
     mysql_patterns = {
         "password": [
-            r'password:\s*["\']?([^"\'\s]+)',
-            r'MYSQL_PASSWORD[=:]\s*["\']?([^"\'\s]+)',
-            r'MYSQL_ROOT_PASSWORD[=:]\s*["\']?([^"\'\s]+)',
+            r'password:\s*["\']?([^"\'\s\n#]+)',  # 排除换行和注释符号
+            r'MYSQL_PASSWORD[=:]\s*["\']?([^"\'\s\n#]+)',
+            r'MYSQL_ROOT_PASSWORD[=:]\s*["\']?([^"\'\s\n#]+)',
         ],
         "database": [
             r'MYSQL_DATABASE[=:]\s*["\']?([^"\'\s]+)',
