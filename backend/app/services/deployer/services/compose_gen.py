@@ -189,7 +189,7 @@ services:
         f.write(compose)
 
 
-def generate_dependency_services(repo_dir: str, app_services: list = None) -> str:
+def generate_dependency_services(repo_dir: str, app_services: list = None, service_versions: dict = None) -> str:
     """生成外部依赖服务的 docker-compose 配置"""
     # 获取项目依赖信息
     config_path = os.path.join(repo_dir, ".stackpilot", "dependencies.json")
@@ -206,6 +206,9 @@ def generate_dependency_services(repo_dir: str, app_services: list = None) -> st
     if not external_services:
         return ""
 
+    # 使用检测到的版本（如果有）
+    if service_versions is None:
+        service_versions = {}
     compose = ""
 
     for service_name in external_services:
@@ -216,11 +219,13 @@ def generate_dependency_services(repo_dir: str, app_services: list = None) -> st
         if not service_info.image:  # 跳过无镜像的服务（如 sqlite）
             continue
 
+        # 使用检测到的版本覆盖默认版本
+        image = service_versions.get(service_name, service_info.image)
         port = service_info.default_port
 
         compose += f"""
   {service_name}:
-    image: {service_info.image}
+    image: {image}
     ports:
       - "{port}:{port}"
 """

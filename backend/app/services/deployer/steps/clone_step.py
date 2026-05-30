@@ -42,12 +42,29 @@ def execute(db: Session, deployment_id: str, deployment: Deployment, git_service
                     "author": commit_info.get("author_name", ""), "message": commit_info["message"],
                     "duration_ms": commit_duration_ms})
 
-    # 3. 检测项目类型
+    # 3. 检测项目类型 + 外部服务版本
     detect_start = datetime.now(timezone.utc)
     detected = _detect_project_type(repo_dir, deployment, db, deployment_id, log_fn)
     deps = detect_project_dependencies(repo_dir)
     detected["dependencies"] = deps
+    # 保存外部服务版本到依赖文件
+    service_versions = deps.get("service_versions", {})
+    if service_versions:
+        deps_dir = os.path.join(repo_dir, ".stackpilot")
+        os.makedirs(deps_dir, exist_ok=True)
+        deps_file = os.path.join(deps_dir, "dependencies.json")
+        if os.path.exists(deps_file):
+            with open(deps_file) as f:
+                existing = json.load(f)
+            existing["service_versions"] = service_versions
+            with open(deps_file, "w") as f:
+                json.dump(existing, f, indent=2)
+    detected["_service_versions"] = service_versions
     detect_duration_ms = int((datetime.now(timezone.utc) - detect_start).total_seconds() * 1000)
+    if service_versions:
+        log_fn(db, deployment_id, "info",
+               f"Detected service versions: {service_versions}",
+               details={"event": "service_versions", "versions": service_versions})
 
     # 4. 保存到 config + Python 属性
     config = deployment.config or {}

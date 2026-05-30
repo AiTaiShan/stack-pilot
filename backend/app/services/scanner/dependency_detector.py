@@ -38,7 +38,7 @@ class ExternalService:
 # 外部服务定义
 EXTERNAL_SERVICES: Dict[str, ExternalService] = {
     # 数据库
-    "mysql": ExternalService("mysql", "database", "mysql:8", 3306, {"MYSQL_ROOT_PASSWORD": "root", "MYSQL_DATABASE": "app"}),
+    "mysql": ExternalService("mysql", "database", "mysql:5.7", 3306, {"MYSQL_ROOT_PASSWORD": "root", "MYSQL_DATABASE": "app"}),
     "postgresql": ExternalService("postgresql", "database", "postgres:15", 5432, {"POSTGRES_PASSWORD": "postgres", "POSTGRES_DB": "app"}),
     "mongodb": ExternalService("mongodb", "database", "mongo:6", 27017, {"MONGO_INITDB_ROOT_USERNAME": "admin", "MONGO_INITDB_ROOT_PASSWORD": "password"}),
     "sqlite": ExternalService("sqlite", "database", "", 0),  # 内嵌数据库，无需容器
@@ -1008,4 +1008,152 @@ class DependencyDetector:
 def detect_project_dependencies(repo_dir: str) -> Dict[str, Any]:
     """检测项目依赖的便捷函数"""
     detector = DependencyDetector(repo_dir)
-    return detector.detect_all()
+    result = detector.detect_all()
+    # 补充版本检测
+    result["service_versions"] = detect_service_versions(repo_dir)
+    return result
+
+
+def detect_service_versions(repo_dir: str) -> Dict[str, str]:
+    """
+    通用版本检测：根据项目依赖文件自动选择 Docker 镜像版本
+    返回: {"mysql": "mysql:8.0", "redis": "redis:7-alpine", ...}
+    """
+    import xml.etree.ElementTree as ET
+
+    versions = {}
+
+    # 检测 pom.xml 中的依赖版本
+    pom_files = []
+    for root, dirs, files in os.walk(repo_dir):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "target", ".mvn", "__pycache__"}]
+        for f in files:
+            if f == "pom.xml":
+                pom_files.append(os.path.join(root, f))
+
+    # 收集所有 pom.xml 中的属性和版本
+    all_properties = {}
+    dependency_versions = {}
+
+    for pom_path in pom_files:
+        try:
+            tree = ET.parse(pom_path)
+            root = tree.getroot()
+            ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+
+            # 读取 properties 中的版本号
+            props = root.find(".//m:properties", ns)
+            if props is not None:
+                for prop in props:
+                    tag = prop.tag.replace(f'{{{ns["m"]}}}', '')
+                    all_properties[tag] = prop.text.strip() if prop.text else ""
+
+            # 读取 dependencies 中的版本号
+            deps = root.findall(".//m:dependency", ns)
+            for dep in deps:
+                group = dep.find("m:groupId", ns)
+                artifact = dep.find("m:artifactId", ns)
+                version = dep.find("m:version", ns)
+                if group is not None and artifact is not None and version is not None:
+                    g = group.text.strip() if group.text else ""
+                    a = artifact.text.strip() if artifact.text else ""
+                    v = version.text.strip() if version.text else ""
+                    dependency_versions[f"{g}:{a}"] = v
+        except Exception as e:
+            logger.debug("Failed to parse pom.xml: %s", e)
+
+    # 替换 properties 中的变量引用
+    def resolve_version(version_str: str) -> str:
+        """解析 ${property.name} 格式的版本号"""
+        if version_str.startswith("${") and version_str.endswith("}"):
+            prop_name = version_str[2:-1]
+            return all_properties.get(prop_name, version_str)
+        return version_str
+
+    # MySQL 版本检测
+    mysql_version = None
+    for key in ["mysql:mysql-connector-java", "com.mysql:mysql-connector-j", "mysql:mysql-connector-j"]:
+        if key in dependency_versions:
+            mysql_version = resolve_version(dependency_versions[key])
+            break
+
+    if mysql_version:
+        major = mysql_version.split(".")[0]
+        if major == "5":
+            versions["mysql"] = "mysql:5.7"
+        elif major == "8":
+            # MySQL 8.0+ 使用 caching_sha2_password，需要兼容性配置
+            versions["mysql"] = "mysql:8.0"
+        else:
+            versions["mysql"] = "mysql:8.0"
+    else:
+        # 默认使用 MySQL 5.7（兼容性最好）
+        versions["mysql"] = "mysql:5.7"
+
+    # PostgreSQL 版本检测
+    pg_version = None
+    for key in ["org.postgresql:postgresql"]:
+        if key in dependency_versions:
+            pg_version = resolve_version(dependency_versions[key])
+            break
+
+    if pg_version:
+        major = pg_version.split(".")[0]
+        versions["postgresql"] = f"postgres:{major}"
+    else:
+        versions["postgresql"] = "postgres:15"
+
+    # Redis 版本检测（通过 Spring Boot Starter 或 Redisson）
+    redis_version = None
+    for key in ["org.redisson:redisson", "redis.clients:jedis", "io.lettuce:lettuce-core"]:
+        if key in dependency_versions:
+            redis_version = resolve_version(dependency_versions[key])
+            break
+
+    if redis_version:
+        major = redis_version.split(".")[0]
+        versions["redis"] = f"redis:{major}-alpine"
+    else:
+        versions["redis"] = "redis:7-alpine"
+
+    # MongoDB 版本检测
+    mongo_version = None
+    for key in ["org.mongodb:mongodb-driver", "org.mongodb:mongodb-driver-sync"]:
+        if key in dependency_versions:
+            mongo_version = resolve_version(dependency_versions[key])
+            break
+
+    if mongo_version:
+        major = mongo_version.split(".")[0]
+        versions["mongodb"] = f"mongo:{major}"
+    else:
+        versions["mongodb"] = "mongo:6"
+
+    # Kafka 版本检测
+    kafka_version = None
+    for key in ["org.apache.kafka:kafka-clients", "org.springframework.kafka:spring-kafka"]:
+        if key in dependency_versions:
+            kafka_version = resolve_version(dependency_versions[key])
+            break
+
+    if kafka_version:
+        major_minor = ".".join(kafka_version.split(".")[:2])
+        versions["kafka"] = f"confluentinc/cp-kafka:{major_minor}"
+    else:
+        versions["kafka"] = "confluentinc/cp-kafka:7.5"
+
+    # RabbitMQ 版本检测
+    rabbit_version = None
+    for key in ["com.rabbitmq:amqp-client"]:
+        if key in dependency_versions:
+            rabbit_version = resolve_version(dependency_versions[key])
+            break
+
+    if rabbit_version:
+        major = rabbit_version.split(".")[0]
+        versions["rabbitmq"] = f"rabbitmq:{major}-management"
+    else:
+        versions["rabbitmq"] = "rabbitmq:3-management"
+
+    logger.info("Detected service versions: %s", versions)
+    return versions
