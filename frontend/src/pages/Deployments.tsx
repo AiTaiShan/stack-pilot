@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Tag, Space, message, Button, Popconfirm } from 'antd'
+import { Table, Tag, Space, message, Button, Popconfirm, Drawer } from 'antd'
 import type { ColumnType } from 'antd/es/table/interface'
 import { StopOutlined, RedoOutlined, EyeOutlined } from '@ant-design/icons'
 import client from '../api/client'
+import DeploymentProgress from '../components/DeploymentProgress'
 
 const statusColors: Record<string, string> = {
   pending: 'default',
@@ -35,6 +36,8 @@ const formatDate = (dateStr: string) => {
 const Deployments: React.FC = () => {
   const [deployments, setDeployments] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
+  const [drawerVisible, setDrawerVisible] = useState(false)
+  const [selectedDeployment, setSelectedDeployment] = useState<any>(null)
 
   const fetchDeployments = async () => {
     setLoading(true)
@@ -62,6 +65,39 @@ const Deployments: React.FC = () => {
   useEffect(() => {
     fetchDeployments()
   }, [])
+
+  const openDrawer = (deployment: any) => {
+    setSelectedDeployment(deployment)
+    setDrawerVisible(true)
+  }
+
+  // 刷新选中的部署状态
+  useEffect(() => {
+    if (!drawerVisible || !selectedDeployment) return
+
+    const isRunning = selectedDeployment.status === 'running' || selectedDeployment.status === 'paused'
+    if (!isRunning) return
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await client.get(`/deployments/${selectedDeployment.id}/status`)
+        const updated = res.data.data
+        setSelectedDeployment((prev: any) => prev ? { ...prev, ...updated } : null)
+
+        // 同时刷新部署列表
+        fetchDeployments()
+
+        // 如果部署完成或取消，停止刷新
+        if (['success', 'failed', 'cancelled'].includes(updated.status)) {
+          clearInterval(interval)
+        }
+      } catch (error) {
+        console.error('刷新部署状态失败:', error)
+      }
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [drawerVisible, selectedDeployment?.id, selectedDeployment?.status])
 
   const handleCancel = async (deploymentId: string) => {
     try {
@@ -102,7 +138,7 @@ const Deployments: React.FC = () => {
       title: '操作', key: 'action', width: 180, fixed: 'right',
       render: (_: any, record: any) => (
         <Space size={4}>
-          <Button type="link" size="small" icon={<EyeOutlined />}>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openDrawer(record)}>
             详情
           </Button>
           {(record.status === 'running' || record.status === 'paused') && (
@@ -131,6 +167,24 @@ const Deployments: React.FC = () => {
     <div>
       <h2>部署记录</h2>
       <Table columns={columns} dataSource={deployments} loading={loading} rowKey="id" />
+
+      <Drawer
+        title="部署详情"
+        placement="right"
+        width={600}
+        open={drawerVisible}
+        onClose={() => setDrawerVisible(false)}
+      >
+        {selectedDeployment && (
+          <DeploymentProgress
+            deploymentId={selectedDeployment.id}
+            status={selectedDeployment.status}
+            currentStep={selectedDeployment.current_step}
+            progress={selectedDeployment.progress}
+            showCard={false}
+          />
+        )}
+      </Drawer>
     </div>
   )
 }
