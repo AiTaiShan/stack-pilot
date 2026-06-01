@@ -146,14 +146,16 @@ stack-pilot/
 │   │   ├── schemas/         # Pydantic 数据模式
 │   │   ├── services/        # 业务逻辑
 │   │   │   ├── auth/        # 认证服务
-│   │   │   ├── scanner/     # 代码扫描 + Git 服务 + 依赖检测
+│   │   │   ├── scanner/     # 代码扫描（检测规则 + Dockerfile 模板）
+│   │   │   │   ├── rules/     # 语言检测规则（8 种语言）
+│   │   │   │   └── templates/ # Dockerfile 模板（8 种语言）
 │   │   │   ├── ai/          # AI 服务（配置审核 + 错误诊断）
 │   │   │   ├── deployer/    # Docker/K8s/部署管理器 + 容器清理
 │   │   │   ├── config/      # 配置管理
 │   │   │   └── monitoring/  # 监控服务
 │   │   └── utils/           # 工具（日志）
 │   ├── alembic/             # 数据库迁移
-│   ├── tests/               # 测试（81 个）
+│   ├── tests/               # 测试（232 个）
 │   └── Dockerfile
 ├── frontend/
 │   ├── src/
