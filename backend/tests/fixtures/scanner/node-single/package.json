@@ -1,0 +1,1 @@
+{"name": "node-app", "scripts": {"start": "node index.js", "build": "webpack"}}

@@ -95,8 +95,37 @@ def execute(db: Session, deployment_id: str, deployment: Deployment, git_service
 
 def _detect_project_type(repo_dir: str, deployment, db: Session, deployment_id: str, log_fn) -> dict:
     """检测项目类型，先用规则初筛，再交给 LLM 审核修正"""
-    # 1. 规则初筛
-    detected = _rule_based_detect(repo_dir)
+    from app.services.scanner.detector import detect
+
+    # 1. 规则初筛（使用通用检测器）
+    scan_result = detect(repo_dir)
+
+    detected = {
+        "type": scan_result.project_type,
+        "language": scan_result.language,
+        "framework": scan_result.framework or "",
+        "port": scan_result.port,
+        "entry_point": scan_result.entry_point,
+        "package_manager": scan_result.package_manager,
+    }
+
+    if scan_result.services:
+        detected["services"] = [
+            {"name": s.name, "dir": s.dir, "type": s.type, "port": s.port,
+             "language": s.language, "framework": s.framework or ""}
+            for s in scan_result.services
+        ]
+    if scan_result.frontend:
+        detected["frontend"] = {
+            "dir": scan_result.frontend.dir, "language": scan_result.frontend.language,
+            "framework": scan_result.frontend.framework or "", "port": scan_result.frontend.port,
+        }
+    if scan_result.backend:
+        detected["backend"] = {
+            "dir": scan_result.backend.dir, "language": scan_result.backend.language,
+            "framework": scan_result.backend.framework or "", "port": scan_result.backend.port,
+        }
+    detected["_key_files"] = scan_result.key_files
 
     # 2. LLM 审核
     detected = _llm_review_detection(repo_dir, detected, db, deployment_id, log_fn)
@@ -104,33 +133,13 @@ def _detect_project_type(repo_dir: str, deployment, db: Session, deployment_id: 
     return detected
 
 
-def _rule_based_detect(repo_dir: str) -> dict:
-    """原有规则检测逻辑"""
-    # 1. 检测是否为多模块 Java 项目（Spring Cloud）
-    multi_module = _detect_multi_module_java(repo_dir)
-    if multi_module:
-        return multi_module
-
-    # 2. 检测是否为通用微服务项目（任何语言）
-    microservices = _detect_microservices(repo_dir)
-    if microservices:
-        return microservices
-
-    # 3. 检测是否为 monorepo（前后端分离）
-    monorepo = _detect_monorepo(repo_dir)
-    if monorepo:
-        return monorepo
-
-    # 4. 单项目
-    return _detect_single_project(repo_dir)
-
-
 def _llm_review_detection(repo_dir: str, detected: dict, db: Session, deployment_id: str, log_fn) -> dict:
     """调用 LLM 审核项目类型检测结果，修正错误并补充缺失信息"""
     from app.services.ai.ai_service import get_ai_service
+    from app.services.scanner.detector import _collect_project_structure as _collect_structure
     import re
 
-    structure = _collect_project_structure(repo_dir)
+    structure = _collect_structure(repo_dir)
 
     prompt = f"""分析以下项目结构，审核项目类型检测结果。
 
@@ -181,7 +190,15 @@ def _llm_review_detection(repo_dir: str, detected: dict, db: Session, deployment
         if review.get("frontend_dir") and "frontend" not in detected:
             frontend_path = os.path.join(repo_dir, review["frontend_dir"])
             if os.path.isdir(frontend_path):
-                frontend_info = _detect_single_project(frontend_path)
+                from app.services.scanner.detector import detect as _detect_sub
+                frontend_scan = _detect_sub(frontend_path)
+                frontend_info = {
+                    "language": frontend_scan.language,
+                    "framework": frontend_scan.framework or "",
+                    "port": frontend_scan.port,
+                    "entry_point": frontend_scan.entry_point,
+                    "package_manager": frontend_scan.package_manager,
+                }
                 frontend_info["dir"] = review["frontend_dir"]
                 detected["frontend"] = frontend_info
                 # 升级类型
@@ -220,365 +237,6 @@ def _llm_review_detection(repo_dir: str, detected: dict, db: Session, deployment
     return detected
 
 
-def _collect_project_structure(repo_dir: str, max_depth: int = 3) -> str:
-    """收集项目结构摘要，用于 LLM 分析"""
-    lines = []
-    key_file_names = {
-        "pom.xml", "package.json", "go.mod", "requirements.txt", "Dockerfile",
-        "docker-compose.yml", "pnpm-lock.yaml", "yarn.lock", "package-lock.json",
-        ".env", "start.sh", "build.gradle", "build.gradle.kts", "Cargo.toml",
-        "Gemfile", "composer.json", "*.csproj",
-    }
-    skip_dirs = {".git", "node_modules", "target", ".mvn", "__pycache__", ".stackpilot",
-                 "dist", "build", ".idea", ".vscode", ".husky"}
-
-    for root, dirs, files in os.walk(repo_dir):
-        depth = root.replace(repo_dir, "").count(os.sep)
-        if depth > max_depth:
-            dirs.clear()
-            continue
-        dirs[:] = sorted([d for d in dirs if d not in skip_dirs])
-
-        indent = "  " * depth
-        basename = os.path.basename(root) if root != repo_dir else os.path.basename(repo_dir) + "/"
-        lines.append(f"{indent}{basename}")
-
-        key_files = [f for f in files
-                     if f in key_file_names
-                     or f.endswith(".properties")
-                     or f.endswith(".yml")
-                     or f.endswith(".yaml")]
-        for f in key_files[:8]:
-            lines.append(f"{indent}  {f}")
-
-    return "\n".join(lines[:120])
-
-
-def _detect_microservices(repo_dir: str) -> dict:
-    """检测通用微服务项目（任何语言）"""
-    service_dirs = ["services", "microservices", "apps", "packages", "modules"]
-    services = []
-
-    for base_dir in service_dirs:
-        base_path = os.path.join(repo_dir, base_dir)
-        if not os.path.isdir(base_path):
-            continue
-
-        # 遍历子目录
-        for item in sorted(os.listdir(base_path)):
-            item_path = os.path.join(base_path, item)
-            if not os.path.isdir(item_path):
-                continue
-
-            # 检测是否为独立服务
-            service_info = _detect_service_in_dir(item_path, item)
-            if service_info:
-                service_info["dir"] = f"{base_dir}/{item}"
-                services.append(service_info)
-
-        if services:
-            break
-
-    # 也检查根目录下的服务目录
-    if not services:
-        for item in sorted(os.listdir(repo_dir)):
-            if item.startswith(".") or item in ["docs", "test", "tests", "scripts", "deploy", "k8s", "kubernetes"]:
-                continue
-            item_path = os.path.join(repo_dir, item)
-            if not os.path.isdir(item_path):
-                continue
-
-            # 检查是否以 -service 或 _service 结尾
-            if item.endswith("-service") or item.endswith("_service") or item.endswith("-api") or item.endswith("_api"):
-                service_info = _detect_service_in_dir(item_path, item)
-                if service_info:
-                    service_info["dir"] = item
-                    services.append(service_info)
-
-    if len(services) >= 2:  # 至少2个服务才算微服务项目
-        return {
-            "type": "microservices",
-            "services": services
-        }
-
-    return None
-
-
-def _detect_service_in_dir(dir_path: str, name: str) -> dict:
-    """检测目录是否为独立服务"""
-    files = os.listdir(dir_path)
-    service = {"name": name, "port": 8080, "language": "unknown", "framework": ""}
-
-    # 检测语言
-    if any(f.endswith(".java") for f in os.listdir(os.path.join(dir_path, "src")) if os.path.isdir(os.path.join(dir_path, "src"))) or "pom.xml" in files or "build.gradle" in files:
-        service["language"] = "java"
-        service["framework"] = "spring"
-        service["port"] = 8080
-    elif "package.json" in files:
-        service["language"] = "node"
-        service["framework"] = ""
-        service["port"] = 3000
-        try:
-            with open(os.path.join(dir_path, "package.json")) as f:
-                pkg = json.load(f)
-                if "scripts" in pkg and "start" in pkg["scripts"]:
-                    service["start_cmd"] = "npm start"
-        except Exception:
-            pass
-    elif "requirements.txt" in files or "setup.py" in files or "pyproject.toml" in files:
-        service["language"] = "python"
-        service["framework"] = ""
-        service["port"] = 8000
-        for main_file in ["main.py", "app.py", "server.py"]:
-            if main_file in files:
-                service["start_cmd"] = f"python {main_file}"
-                break
-    elif "go.mod" in files:
-        service["language"] = "go"
-        service["framework"] = ""
-        service["port"] = 8080
-    elif "Cargo.toml" in files:
-        service["language"] = "rust"
-        service["framework"] = ""
-        service["port"] = 8080
-    elif "*.csproj" in " ".join(files) or any(f.endswith(".csproj") for f in files):
-        service["language"] = "dotnet"
-        service["framework"] = ""
-        service["port"] = 5000
-    else:
-        return None
-
-    # 检测端口
-    for config_file in ["application.yml", "application.yaml", "application.properties", ".env", "config.yaml", "config.json"]:
-        config_path = os.path.join(dir_path, config_file)
-        if os.path.exists(config_path):
-            try:
-                with open(config_path) as f:
-                    content = f.read()
-                    port_match = re.search(r'(?:PORT|port|server\.port)\s*[=:]\s*(\d+)', content)
-                    if port_match:
-                        service["port"] = int(port_match.group(1))
-                        break
-            except Exception:
-                pass
-
-    return service
-
-
-def _detect_multi_module_java(repo_dir: str) -> dict:
-    """检测多模块 Java 项目（Maven/Gradle）"""
-    import xml.etree.ElementTree as ET
-
-    pom_path = os.path.join(repo_dir, "pom.xml")
-    if not os.path.exists(pom_path):
-        return None
-
-    try:
-        tree = ET.parse(pom_path)
-        root = tree.getroot()
-        ns = {"m": "http://maven.apache.org/POM/4.0.0"}
-
-        # 检查是否有 modules 标签
-        modules = root.findall(".//m:module", ns)
-        if not modules:
-            # 尝试无命名空间
-            modules = root.findall(".//module")
-
-        if not modules:
-            return None
-
-        # 检测每个子模块
-        services = []
-        for module_elem in modules:
-            module_name = module_elem.text.strip() if module_elem.text else ""
-            module_dir = os.path.join(repo_dir, module_name)
-
-            if not os.path.isdir(module_dir):
-                continue
-
-            # 检测子模块类型
-            module_info = _detect_java_module(module_dir, module_name)
-            if module_info:
-                services.append(module_info)
-
-        if services:
-            return {
-                "type": "multi-module-java",
-                "language": "java",
-                "framework": "spring-cloud",
-                "services": services
-            }
-
-    except Exception as e:
-        logger.warning("Failed to parse pom.xml: %s", e)
-
-    return None
-
-
-def _detect_java_module(module_dir: str, module_name: str) -> dict:
-    """检测 Java 子模块类型"""
-    has_pom = os.path.exists(os.path.join(module_dir, "pom.xml"))
-    has_src = os.path.isdir(os.path.join(module_dir, "src"))
-
-    if not (has_pom and has_src):
-        return None
-
-    # 检测端口
-    port = 8080
-    for config_file in ["application.yml", "application.yaml", "application.properties"]:
-        config_path = os.path.join(module_dir, "src", "main", "resources", config_file)
-        if os.path.exists(config_path):
-            try:
-                with open(config_path) as f:
-                    content = f.read()
-                    port_match = re.search(r'server\.port\s*[=:]\s*(\d+)', content)
-                    if port_match:
-                        port = int(port_match.group(1))
-            except Exception:
-                pass
-
-    # 判断模块类型
-    module_type = "service"
-    name_lower = module_name.lower()
-    if "eureka" in name_lower or "registry" in name_lower:
-        module_type = "registry"
-    elif "gateway" in name_lower or "zuul" in name_lower:
-        module_type = "gateway"
-    elif "config" in name_lower:
-        module_type = "config"
-    elif "common" in name_lower or "util" in name_lower or "api" in name_lower:
-        module_type = "common"
-
-    return {
-        "name": module_name,
-        "dir": module_name,
-        "type": module_type,
-        "port": port,
-        "language": "java",
-        "framework": "spring"
-    }
-
-
-def _detect_monorepo(repo_dir: str) -> dict:
-    """检测 monorepo 项目结构"""
-    common_frontend_dirs = ["frontend", "client", "web", "ui", "app"]
-    common_backend_dirs = ["backend", "server", "api", "services"]
-
-    frontend_dir = None
-    backend_dir = None
-
-    for d in common_frontend_dirs:
-        path = os.path.join(repo_dir, d)
-        if os.path.isdir(path):
-            if any(os.path.exists(os.path.join(path, f)) for f in ["package.json", "index.html"]):
-                frontend_dir = d
-                break
-
-    for d in common_backend_dirs:
-        path = os.path.join(repo_dir, d)
-        if os.path.isdir(path):
-            if any(os.path.exists(os.path.join(path, f)) for f in [
-                "requirements.txt", "pom.xml", "go.mod", "main.py", "app.py",
-                "package.json", "build.gradle"
-            ]):
-                backend_dir = d
-                break
-
-    if frontend_dir and backend_dir:
-        # 检测各子项目类型
-        frontend_info = _detect_single_project(os.path.join(repo_dir, frontend_dir))
-        backend_info = _detect_single_project(os.path.join(repo_dir, backend_dir))
-
-        return {
-            "type": "monorepo",
-            "frontend": {
-                "dir": frontend_dir,
-                **frontend_info
-            },
-            "backend": {
-                "dir": backend_dir,
-                **backend_info
-            }
-        }
-
-    return None
-
-
-def _detect_single_project(repo_dir: str) -> dict:
-    """检测单个项目类型"""
-    files = os.listdir(repo_dir)
-    result = {"language": "unknown", "framework": ""}
-
-    # Java / Maven / Gradle
-    if "pom.xml" in files:
-        result = {"language": "java", "framework": "spring"}
-    elif "build.gradle" in files or "build.gradle.kts" in files:
-        result = {"language": "java", "framework": "spring"}
-
-    # Node.js
-    elif "package.json" in files:
-        if os.path.exists(os.path.join(repo_dir, "next.config.js")) or os.path.exists(os.path.join(repo_dir, "next.config.mjs")):
-            result = {"language": "node", "framework": "next"}
-        else:
-            result = {"language": "node", "framework": ""}
-        # 从 package.json 读取启动命令
-        try:
-            with open(os.path.join(repo_dir, "package.json")) as f:
-                pkg = json.load(f)
-                if "scripts" in pkg:
-                    if "start" in pkg["scripts"]:
-                        result["start_cmd"] = "npm start"
-                    elif "dev" in pkg["scripts"]:
-                        result["start_cmd"] = "npm run dev"
-        except Exception:
-            pass
-
-    # Python
-    elif "requirements.txt" in files or "setup.py" in files or "pyproject.toml" in files:
-        if "manage.py" in files:
-            result = {"language": "python", "framework": "django"}
-        else:
-            result = {"language": "python", "framework": ""}
-        # 检测 Python 启动文件
-        for main_file in ["main.py", "app.py", "server.py", "wsgi.py"]:
-            if main_file in files:
-                result["start_cmd"] = f"python {main_file}"
-                break
-
-    # Go
-    elif "go.mod" in files:
-        result = {"language": "go", "framework": ""}
-        try:
-            with open(os.path.join(repo_dir, "go.mod")) as f:
-                for line in f:
-                    if line.startswith("module "):
-                        module = line.split()[-1].strip()
-                        result["start_cmd"] = f"./{module.split('/')[-1]}"
-                        break
-        except Exception:
-            pass
-
-    # 检测通用启动脚本
-    if "start_cmd" not in result:
-        for script in ["start.sh", "run.sh", "entrypoint.sh"]:
-            if script in files:
-                result["start_cmd"] = f"./{script}"
-                break
-
-    # 检测端口
-    if os.path.exists(os.path.join(repo_dir, "Dockerfile")):
-        try:
-            with open(os.path.join(repo_dir, "Dockerfile")) as f:
-                for line in f:
-                    if "EXPOSE" in line:
-                        ports = line.replace("EXPOSE", "").strip().split()
-                        if ports:
-                            result["port"] = int(ports[0])
-                        break
-        except Exception:
-            pass
-
-    return result
 
 
 def _cleanup_old_images(db: Session, deployment_id: str, repo_name: str, git_service: GitService, log_fn):

@@ -85,7 +85,9 @@ def test_monitoring_endpoints(client, auth_headers):
     # 部署统计
     resp = client.get("/api/v1/monitoring/deployments/stats", headers=auth_headers)
     assert resp.status_code == 200
-    stats = resp.json()
+    body = resp.json()
+    assert "data" in body
+    stats = body["data"]
     assert "total" in stats
     assert "success" in stats
     assert "failed" in stats
