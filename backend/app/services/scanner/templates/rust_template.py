@@ -8,7 +8,7 @@ Rust Dockerfile 模板
 """
 
 
-def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> str:
+def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "", version: str = "1.75") -> str:
     """生成 Rust Dockerfile 内容（多阶段构建）。
 
     Args:
@@ -20,7 +20,8 @@ def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> 
     Returns:
         Dockerfile 内容字符串
     """
-    return f"""FROM rust:1.75-slim AS builder
+    rust_image = f"rust:{version}-slim"
+    return f"""FROM {rust_image} AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 RUN cargo fetch

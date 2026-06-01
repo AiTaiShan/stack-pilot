@@ -8,7 +8,7 @@ PHP Dockerfile 模板
 """
 
 
-def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> str:
+def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "", version: str = "8.2") -> str:
     """生成 PHP Dockerfile 内容。
 
     Args:
@@ -20,7 +20,8 @@ def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> 
     Returns:
         Dockerfile 内容字符串
     """
-    return f"""FROM php:8.2-apache
+    php_image = f"php:{version}-apache"
+    return f"""FROM {php_image}
 WORKDIR /var/www/html
 COPY . .
 RUN {build_cmd or 'composer install --no-dev'}

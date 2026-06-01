@@ -52,6 +52,23 @@ class JavaRule(BaseRule):
                 framework = cls._detect_framework_from_pom(pom_content)
                 if framework:
                     result["framework"] = framework
+
+                # 多模块项目：根 pom 可能无框架依赖，递归扫描子模块
+                if not framework:
+                    import xml.etree.ElementTree as ET
+                    try:
+                        root_elem = ET.fromstring(re.sub(r'\sxmlns="[^"]+"', '', pom_content, count=1))
+                        for mod in root_elem.findall(".//module"):
+                            mod_name = mod.text.strip() if mod.text else ""
+                            mod_pom = os.path.join(dir_path, mod_name, "pom.xml")
+                            if os.path.exists(mod_pom):
+                                mod_content = cls._read_file(mod_pom)
+                                fw = cls._detect_framework_from_pom(mod_content)
+                                if fw:
+                                    result["framework"] = fw
+                                    break
+                    except Exception:
+                        pass
             except Exception:
                 pass
         elif has_gradle:
@@ -63,12 +80,49 @@ class JavaRule(BaseRule):
             except Exception:
                 pass
 
-        # ---------- 入口点 ----------
+        # ---------- 版本检测 ----------
+        if has_pom:
+            try:
+                pom_text = cls._read_file(os.path.join(dir_path, "pom.xml"))
+                # 查找 <java.version> 属性
+                m = re.search(r'<java\.version>([^<]+)</java\.version>', pom_text)
+                if m:
+                    result["version"] = m.group(1).strip()
+                # 分别查找 maven.compiler.source 和 maven.compiler.target
+                if "version" not in result:
+                    m = re.search(r'<maven\.compiler\.source>([^<]+)</maven\.compiler\.source>', pom_text)
+                    if m:
+                        result["version"] = m.group(1).strip()
+                if "version" not in result:
+                    m = re.search(r'<maven\.compiler\.target>([^<]+)</maven\.compiler\.target>', pom_text)
+                    if m:
+                        result["version"] = m.group(1).strip()
+            except Exception:
+                pass
+
+        # ---------- 入口点（根目录 + 子模块递归扫描） ----------
         java_dir = os.path.join(dir_path, "src", "main", "java")
         if os.path.isdir(java_dir):
             entry = cls._find_entry_point(java_dir, dir_path)
             if entry:
                 result["entry_point"] = entry
+
+        # 多模块项目：扫描子模块的 src/main/java
+        if not result["entry_point"] and has_pom:
+            try:
+                import xml.etree.ElementTree as ET
+                pom_text = cls._read_file(os.path.join(dir_path, "pom.xml"))
+                root_elem = ET.fromstring(re.sub(r'\sxmlns="[^"]+"', '', pom_text, count=1))
+                for mod in root_elem.findall(".//module"):
+                    mod_name = mod.text.strip() if mod.text else ""
+                    mod_java_dir = os.path.join(dir_path, mod_name, "src", "main", "java")
+                    if os.path.isdir(mod_java_dir):
+                        entry = cls._find_entry_point(mod_java_dir, dir_path)
+                        if entry:
+                            result["entry_point"] = entry
+                            break
+            except Exception:
+                pass
 
         # ---------- 启动命令 ----------
         if artifact_id and version:
@@ -88,9 +142,18 @@ class JavaRule(BaseRule):
 
     @classmethod
     def _parse_xml_value(cls, content: str, tag: str) -> str:
-        """从 XML 中提取指定标签的内容"""
-        # 跳过 project 和 dependencies 层级
-        # 查找第一个顶级标签的值
+        """从 XML 中提取指定标签的内容（使用 XML 解析器，避免正则嵌套问题）"""
+        try:
+            # 去掉 namespace 以简化解析
+            import re as _re
+            clean_content = _re.sub(r'\sxmlns="[^"]+"', '', content, count=1)
+            root = ET.fromstring(clean_content)
+            elem = root.find(f".//{tag}")
+            if elem is not None and elem.text:
+                return elem.text.strip()
+        except Exception:
+            pass
+        # fallback: 正则（取第一个匹配）
         pattern = rf"<{tag}>([^<]+)</{tag}>"
         m = re.search(pattern, content)
         if m:
@@ -104,10 +167,20 @@ class JavaRule(BaseRule):
 
         if "mybatis-spring-boot" in content_lower:
             return "mybatis"
-        if "spring-boot-starter" in content_lower or "spring-boot-maven-plugin" in content_lower:
+        if any(kw in content_lower for kw in [
+            "spring-boot-starter", "spring-boot-maven-plugin", "org.springframework.boot"
+        ]):
             return "spring-boot"
         if "quarkus" in content_lower:
             return "quarkus"
+        if "micronaut" in content_lower:
+            return "micronaut"
+        if "dropwizard" in content_lower:
+            return "dropwizard"
+        if "io.vertx" in content_lower:
+            return "vertx"
+        if "com.typesafe.play" in content_lower:
+            return "play"
 
         return ""
 
@@ -118,7 +191,9 @@ class JavaRule(BaseRule):
 
         if "mybatis-spring-boot" in content_lower:
             return "mybatis"
-        if "org.springframework.boot" in content_lower:
+        if any(kw in content_lower for kw in [
+            "org.springframework.boot", "spring-boot"
+        ]):
             return "spring-boot"
         if "quarkus" in content_lower:
             return "quarkus"
@@ -172,32 +247,42 @@ class JavaRule(BaseRule):
 
     @classmethod
     def _detect_port(cls, dir_path: str) -> int:
-        """从 application.properties 或 application.yml 检测端口"""
-        resources_dir = os.path.join(dir_path, "src", "main", "resources")
-        if not os.path.isdir(resources_dir):
-            return None
+        """从配置文件检测端口（支持子目录、多环境配置）"""
+        # 收集所有可能的 resources 目录（多模块项目）
+        resources_dirs = []
+        base_resources = os.path.join(dir_path, "src", "main", "resources")
+        if os.path.isdir(base_resources):
+            resources_dirs.append(base_resources)
 
-        # 尝试 application.properties
-        prop_path = os.path.join(resources_dir, "application.properties")
-        if os.path.isfile(prop_path):
-            try:
-                content = cls._read_file(prop_path)
-                m = re.search(r"^server\.port\s*=\s*(\d+)", content, re.MULTILINE)
-                if m:
-                    return int(m.group(1))
-            except Exception:
-                pass
+        # 扫描子模块的 resources 目录
+        for item in os.listdir(dir_path):
+            sub_resources = os.path.join(dir_path, item, "src", "main", "resources")
+            if os.path.isdir(sub_resources) and sub_resources not in resources_dirs:
+                resources_dirs.append(sub_resources)
 
-        # 尝试 application.yml
-        yml_path = os.path.join(resources_dir, "application.yml")
-        if os.path.isfile(yml_path):
-            try:
-                content = cls._read_file(yml_path)
-                m = re.search(r"port:\s*(\d+)", content)
-                if m:
-                    return int(m.group(1))
-            except Exception:
-                pass
+        config_files = [
+            "application.properties", "application.yml", "application.yaml",
+            "application-dev.properties", "application-dev.yml",
+            "bootstrap.properties", "bootstrap.yml",
+        ]
+
+        for resources_dir in resources_dirs:
+            for cfg_file in config_files:
+                cfg_path = os.path.join(resources_dir, cfg_file)
+                if not os.path.isfile(cfg_path):
+                    continue
+                try:
+                    content = cls._read_file(cfg_path)
+                    # properties 格式
+                    m = re.search(r"^server\.port\s*=\s*(\d+)", content, re.MULTILINE)
+                    if m:
+                        return int(m.group(1))
+                    # yml 格式
+                    m = re.search(r"port:\s*(\d+)", content)
+                    if m:
+                        return int(m.group(1))
+                except Exception:
+                    pass
 
         return None
 

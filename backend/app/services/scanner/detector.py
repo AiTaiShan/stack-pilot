@@ -126,7 +126,7 @@ def detect(repo_dir: str) -> ScanResult:
         result.key_files["existing_dockerfile"] = _collect_existing_dockerfile(repo_dir)
         return result
 
-    # 单体 + 无匹配
+    # 单体 + 根目录无匹配
     for rule_cls in ALL_RULES:
         if rule_cls.detect_language(root_files):
             info = rule_cls.detect(repo_dir)
@@ -136,12 +136,39 @@ def detect(repo_dir: str) -> ScanResult:
                                 package_manager=info.get("package_manager"),
                                 build_command=info.get("build_command"),
                                 start_command=info.get("start_command"),
+                                version=info.get("version"),
                                 port=info.get("port", 8080),
                                 key_files={}, dependencies={})
             result.key_files["structure"] = _collect_project_structure(repo_dir)
             result.key_files["manifest"] = _collect_manifest(repo_dir)
             result.key_files["existing_dockerfile"] = _collect_existing_dockerfile(repo_dir)
             return result
+
+    # 根目录无匹配时，扫描一级子目录（如 src/*.csproj、backend/package.json）
+    for sub in sorted(root_files):
+        sub_path = os.path.join(repo_dir, sub)
+        if not os.path.isdir(sub_path) or sub.startswith("."):
+            continue
+        try:
+            sub_files = os.listdir(sub_path)
+        except Exception:
+            continue
+        for rule_cls in ALL_RULES:
+            if rule_cls.detect_language(sub_files):
+                info = rule_cls.detect(sub_path)
+                result = ScanResult(project_type="single", languages=[rule_cls.language_id()],
+                                    language=rule_cls.language_id(), framework=info.get("framework"),
+                                    entry_point=info.get("entry_point"),
+                                    package_manager=info.get("package_manager"),
+                                    build_command=info.get("build_command"),
+                                    start_command=info.get("start_command"),
+                                    version=info.get("version"),
+                                    port=info.get("port", 8080),
+                                    key_files={}, dependencies={})
+                result.key_files["structure"] = _collect_project_structure(repo_dir)
+                result.key_files["manifest"] = _collect_manifest(sub_path)
+                result.key_files["existing_dockerfile"] = _collect_existing_dockerfile(repo_dir)
+                return result
 
     result = ScanResult(project_type="single", languages=[], key_files={}, dependencies={})
     result.key_files["structure"] = _collect_project_structure(repo_dir)

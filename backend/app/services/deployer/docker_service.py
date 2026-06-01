@@ -48,12 +48,14 @@ class DockerService:
         build_start = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
 
         try:
+            build_env = {**os.environ, "DOCKER_BUILDKIT": "0"}
             result = subprocess.run(
                 cmd,
                 cwd=path,
                 capture_output=True,
                 text=True,
                 timeout=600,
+                env=build_env,
             )
             build_end = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
             duration_ms = int((build_end - build_start).total_seconds() * 1000)
@@ -127,13 +129,15 @@ class DockerService:
         start_cmd = project_info.get("start_cmd") or project_info.get("start_command")
         port = project_info.get("port", 8080)
         build_cmd = project_info.get("build_cmd") or project_info.get("build_command")
+        version = project_info.get("version", "")  # 语言版本，如 "1.24.0"
 
         from app.services.scanner.detector import get_template
         gen_func = get_template(language)
 
         if gen_func:
             dockerfile_content = gen_func(port=port, build_cmd=build_cmd or "",
-                                           start_cmd=start_cmd or "", framework=framework)
+                                           start_cmd=start_cmd or "", framework=framework,
+                                           version=version)
         else:
             # fallback 通用模板
             cmd = start_cmd or "echo 'Please configure your application start command'"

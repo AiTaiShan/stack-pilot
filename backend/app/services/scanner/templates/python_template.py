@@ -8,7 +8,7 @@ Python Dockerfile 模板
 """
 
 
-def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> str:
+def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "", version: str = "3.11") -> str:
     """生成 Python Dockerfile 内容。
 
     Args:
@@ -20,7 +20,8 @@ def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> 
     Returns:
         Dockerfile 内容字符串
     """
-    return f"""FROM python:3.11-slim
+    py_image = f"python:{version}-slim"
+    return f"""FROM {py_image}
 WORKDIR /app
 COPY requirements.txt .
 RUN {build_cmd}

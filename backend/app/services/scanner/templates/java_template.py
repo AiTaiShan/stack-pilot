@@ -8,7 +8,7 @@ Java Dockerfile 模板
 """
 
 
-def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> str:
+def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "", version: str = "17") -> str:
     """生成 Java Dockerfile 内容（多阶段构建）。
 
     Args:
@@ -16,16 +16,19 @@ def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> 
         build_cmd: 构建命令（如 mvn package -DskipTests）
         start_cmd: 启动命令（如 java -jar app.jar）
         framework: 框架名称（如 "spring-boot"）
+        version: Java 版本号（如 "17", "21"），从 pom.xml 读取
 
     Returns:
         Dockerfile 内容字符串
     """
-    return f"""FROM eclipse-temurin:17-jdk-alpine AS builder
+    jdk_image = f"eclipse-temurin:{version}-jdk-alpine"
+    jre_image = f"eclipse-temurin:{version}-jre-alpine"
+    return f"""FROM {jdk_image} AS builder
 WORKDIR /app
 COPY . .
 RUN {build_cmd or 'mvn package -DskipTests'}
 
-FROM eclipse-temurin:17-jre-alpine
+FROM {jre_image}
 WORKDIR /app
 COPY --from=builder /app/target/*.jar app.jar
 EXPOSE {port}

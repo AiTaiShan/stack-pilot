@@ -24,6 +24,7 @@ class FrontendInfo:
     language: str
     framework: Optional[str] = None
     port: int = 3000
+    version: Optional[str] = None
     build_cmd: str = ""
     start_cmd: str = ""
 
@@ -35,6 +36,7 @@ class BackendInfo:
     language: str
     framework: Optional[str] = None
     port: int = 8000
+    version: Optional[str] = None
     entry_point: Optional[str] = None
     start_cmd: Optional[str] = None
 
@@ -51,6 +53,7 @@ class ScanResult:
     build_command: Optional[str] = None
     start_command: Optional[str] = None
     port: int = 8080
+    version: Optional[str] = None  # 从项目配置中检测的语言版本
     services: list = field(default_factory=list)
     frontend: Optional[FrontendInfo] = None
     backend: Optional[BackendInfo] = None

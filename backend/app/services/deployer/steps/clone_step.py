@@ -107,6 +107,7 @@ def _detect_project_type(repo_dir: str, deployment, db: Session, deployment_id: 
         "port": scan_result.port,
         "entry_point": scan_result.entry_point,
         "package_manager": scan_result.package_manager,
+        "version": scan_result.version if hasattr(scan_result, 'version') and scan_result.version else "",
     }
 
     if scan_result.services:

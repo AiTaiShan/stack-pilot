@@ -187,9 +187,15 @@ def _ai_review_project(db: Session, deployment_id: str, repo_dir: str,
     """
     import os, json
 
-    # 1. 收集完整项目信息
+    # 1. 收集完整项目信息（优先从 Python 属性读取，再从 config 读取）
     project_info = dict(deployment.config or {})
-    detected = project_info.get("type", "") if hasattr(deployment, '_project_type') else getattr(deployment, '_project_type', '')
+    # clone_step 存储的检测结果在 _project_info 属性中
+    stored_project_info = getattr(deployment, '_project_info', None) or {}
+    # 合并：stored_project_info 提供 type/language/framework 等检测结果
+    for key in ("type", "language", "framework", "version", "port", "services", "dependencies"):
+        if key not in project_info or not project_info[key]:
+            project_info[key] = stored_project_info.get(key, project_info.get(key))
+
     services = project_info.get("services", [])
     deps = project_info.get("dependencies", {}) or {}
     external_services = deps.get("external_services", [])

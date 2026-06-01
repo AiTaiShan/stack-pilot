@@ -8,7 +8,7 @@ Ruby Dockerfile 模板
 """
 
 
-def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> str:
+def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "", version: str = "3.2") -> str:
     """生成 Ruby Dockerfile 内容。
 
     Args:
@@ -21,7 +21,8 @@ def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> 
         Dockerfile 内容字符串
     """
     cmd = "bundle exec rails server -b 0.0.0.0" if framework == "rails" else (start_cmd or "ruby app.rb")
-    return f"""FROM ruby:3.2-slim
+    rb_image = f"ruby:{version}-slim"
+    return f"""FROM {rb_image}
 WORKDIR /app
 COPY Gemfile Gemfile.lock ./
 RUN {build_cmd or 'bundle install'}

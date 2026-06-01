@@ -8,7 +8,7 @@ Node.js Dockerfile 模板
 """
 
 
-def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> str:
+def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "", version: str = "18") -> str:
     """生成 Node.js Dockerfile 内容。
 
     Args:
@@ -51,16 +51,17 @@ def _get_install_command(pkg_manager: str) -> str:
     return commands.get(pkg_manager, commands["npm"])
 
 
-def _nextjs_template(port: int, install_cmd: str, build_cmd: str, start_cmd: str) -> str:
+def _nextjs_template(port: int, install_cmd: str, build_cmd: str, start_cmd: str, version: str = "18") -> str:
     """Next.js 应用的多阶段构建 Dockerfile。"""
-    return f"""FROM node:18-alpine AS builder
+    node_image = f"node:{version}-alpine"
+    return f"""FROM {node_image} AS builder
 WORKDIR /app
 COPY package*.json ./
 {install_cmd}
 COPY . .
 RUN {build_cmd}
 
-FROM node:18-alpine AS runner
+FROM {node_image} AS runner
 WORKDIR /app
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
@@ -72,9 +73,10 @@ CMD ["sh", "-c", "{start_cmd}"]
 """
 
 
-def _node_template(port: int, install_cmd: str, build_cmd: str, start_cmd: str) -> str:
+def _node_template(port: int, install_cmd: str, build_cmd: str, start_cmd: str, version: str = "18") -> str:
     """标准 Node.js 单阶段构建 Dockerfile。"""
-    return f"""FROM node:18-alpine
+    node_image = f"node:{version}-alpine"
+    return f"""FROM {node_image}
 WORKDIR /app
 COPY package*.json ./
 {install_cmd}

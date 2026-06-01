@@ -1,5 +1,6 @@
 '''Ruby 语言检测规则'''
 import os
+import re
 from .base_rule import BaseRule
 
 
@@ -26,39 +27,63 @@ class RubyRule(BaseRule):
             "port": 3000,
         }
 
-        # 框架检测：读取 Gemfile 中的 rails / sinatra 依赖
         gemfile_path = os.path.join(dir_path, "Gemfile")
-        if os.path.exists(gemfile_path):
-            try:
-                with open(gemfile_path, errors="ignore") as f:
-                    content = f.read().lower()
+        if not os.path.exists(gemfile_path):
+            return result
 
-                if "gem 'rails'" in content or 'gem "rails"' in content:
-                    result["framework"] = "rails"
-                elif "gem 'sinatra'" in content or 'gem "sinatra"' in content:
-                    result["framework"] = "sinatra"
+        try:
+            with open(gemfile_path, errors="ignore") as f:
+                content = f.read()
+            content_lower = content.lower()
+
+            # 框架检测
+            framework_map = {
+                "gem 'rails'": "rails", 'gem "rails"': "rails",
+                "gem 'sinatra'": "sinatra", 'gem "sinatra"': "sinatra",
+                "gem 'hanami'": "hanami", 'gem "hanami"': "hanami",
+                "gem 'padrino'": "padrino", 'gem "padrino"': "padrino",
+                "gem 'grape'": "grape", 'gem "grape"': "grape",
+                "gem 'roda'": "roda", 'gem "roda"': "roda",
+            }
+            for pattern, fw in framework_map.items():
+                if pattern in content_lower:
+                    result["framework"] = fw
+                    break
+
+            # 版本检测：Gemfile 中的 ruby 声明
+            m = re.search(r'ruby\s+["\']([\d\.]+)["\']', content)
+            if m:
+                result["version"] = m.group(1)
+        except Exception:
+            pass
+
+        # .ruby-version 文件
+        ruby_version_path = os.path.join(dir_path, ".ruby-version")
+        if os.path.exists(ruby_version_path):
+            try:
+                with open(ruby_version_path, errors="ignore") as f:
+                    ver = f.read().strip().lstrip("ruby-")
+                    if ver:
+                        result["version"] = ver
             except Exception:
                 pass
 
-        # 入口点检测
-        for entry in ["config.ru", "app.rb", "server.rb"]:
-            entry_path = os.path.join(dir_path, entry)
-            if os.path.isfile(entry_path):
-                result["entry_point"] = entry
-                break
-
-        # 包管理器检测：Gemfile.lock 存在 -> bundler
-        if os.path.exists(os.path.join(dir_path, "Gemfile.lock")):
-            result["package_manager"] = "bundler"
+        # 入口点检测（Rails 6+ 优先 bin/rails）
+        bin_rails = os.path.join(dir_path, "bin", "rails")
+        if os.path.isfile(bin_rails):
+            result["entry_point"] = "bin/rails"
+        else:
+            for entry in ["config.ru", "app.rb", "server.rb"]:
+                entry_path = os.path.join(dir_path, entry)
+                if os.path.isfile(entry_path):
+                    result["entry_point"] = entry
+                    break
 
         # 启动命令
         if result["framework"] == "rails":
             result["start_command"] = "bundle exec rails server -b 0.0.0.0 -p 3000"
         elif result["entry_point"] == "config.ru":
-            if result["framework"] == "rails":
-                result["start_command"] = "bundle exec rails server -b 0.0.0.0 -p 3000"
-            else:
-                result["start_command"] = "bundle exec rackup config.ru -p 3000 -o 0.0.0.0"
+            result["start_command"] = "bundle exec rackup config.ru -p 3000 -o 0.0.0.0"
         elif result["entry_point"]:
             result["start_command"] = f"ruby {result['entry_point']}"
 

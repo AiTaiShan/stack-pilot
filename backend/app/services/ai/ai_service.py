@@ -283,199 +283,54 @@ class AIService:
 
     def review_project(self, repo_dir: str, scan_data: Dict) -> Dict[str, Any]:
         """
-        全面审核项目 — 一次性提供完整扫描上下文，AI 自行决定：
-        1. 哪些模块可执行 → 需要 Dockerfile
-        2. 基础镜像选什么
-        3. 是否需要修改配置文件
-        4. 是否需要 docker-compose.yml（含外部依赖）
+        全面审核项目 — 调用 deploy_agent 进行智能审核：
+        1. 接收扫描检测结果 + 生成的 Dockerfile
+        2. Agent 审核并修复问题（版本匹配、框架适配等）
+        3. 返回修复结果
 
         Args:
-            repo_dir: 项目根目录（用作文件工具的 base_path）
-            scan_data: 完整扫描结果，包含：
-                - project_structure: 目录结构树
-                - config_files: 所有关键配置文件内容
-                - detected: 检测结果（type, language, framework, services, dependencies）
+            repo_dir: 项目根目录
+            scan_data: 完整扫描结果
         """
-        system_prompt = f"""你是一个 DevOps 和容器化专家，正在为一个项目做部署前的准备。
+        from app.services.ai.deploy_agent import run_deploy_review
+        import asyncio
 
-## 你的任务
-1. 审核当前的项目结构，判断哪些模块是**可执行服务**（有 main 方法的 Spring Boot / Quarkus / 普通 Java 应用）
-2. 只给可执行模块生成/优化 Dockerfile，依赖库模块跳过
-3. 必要时修改项目的配置文件（application.yml 等）以适应 Docker 部署
-4. 如果项目有外部依赖（MySQL、Redis 等），生成 docker-compose.yml
-
-## 你可以使用的工具
-- `read_file(<file_path>)` — 读取文件内容
-- `write_file(<file_path>, <content>)` — 写入/修改文件
-- `list_files(<directory>)` — 列出目录内容
-
-所有文件路径是相对于项目根目录「{repo_dir}」的绝对路径。
-
-## 判断可执行模块的标准（满足任一即可）
-1. pom.xml 中有 spring-boot-maven-plugin 打包配置
-2. pom.xml 的 packaging 为 jar/war（非 pom）
-3. 有 @SpringBootApplication 注解的 main 类
-4. 构建产物（target/*.jar）是 fat JAR（有 BOOT-INF 目录）
-5. 有独立的 main 方法
-
-## 项目根目录
-{repo_dir}
-
-## 输出要求
-完成所有文件修改后，返回 JSON：
-{{
-  "executable_services": ["service1", "service2"],
-  "modified_files": ["path/to/Dockerfile", "path/to/application.yml"],
-  "compose_generated": true/false,
-  "summary": "做了什么，为什么"
-}}
-"""
-
-        # 构建消息 —— 数据直接来自 scan_data（非嵌套 detected 结构）
-        structure = scan_data.get("project_structure", "")
-        config_files = scan_data.get("config_files", {})
-        project_type = scan_data.get("project_type", "single")
         language = scan_data.get("language", "unknown")
         framework = scan_data.get("framework", "")
-        services = scan_data.get("services", [])
-        external_services = scan_data.get("external_services", [])
 
-        config_content = "\n\n".join([
-            f"=== {{path}} ===\n{{content}}"
-            for path, content in config_files.items()
-        ])
+        project_info = {
+            "language": language,
+            "framework": framework,
+            "project_type": scan_data.get("project_type", "single"),
+            "version": scan_data.get("version", ""),
+            "port": scan_data.get("port", 8080),
+            "services": scan_data.get("services", []),
+            "external_services": scan_data.get("external_services", []),
+        }
 
-        messages = [
-            {
-                "role": "user",
-                "content": f"""请审核以下项目，完成部署准备。
+        logger.info("review_project: calling deploy_agent, lang=%s framework=%s", language, framework)
 
-## 项目目录结构
-```
-{structure[:3000]}
-```
+        try:
+            import concurrent.futures
+            def _run_agent():
+                return asyncio.run(run_deploy_review(repo_dir, project_info))
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(_run_agent)
+                result = future.result(timeout=120)
 
-## 检测结果
-```json
-{
-  "project_type": "${project_type}",
-  "language": "${language}",
-  "framework": "${framework}",
-  "services": ${json.dumps(services, indent=2, ensure_ascii=False)}
-}
-```
-
-## 外部依赖
-```json
-${json.dumps(external_services, indent=2, ensure_ascii=False)}
-```
-
-## 关键配置文件
-```
-{config_content[:4000]}
-```
-
-## 操作要求
-1. 使用 list_files 探索项目结构
-2. 使用 read_file 读取 pom.xml 等关键文件，判断哪些模块可执行
-3. 为可执行模块生成/优化 Dockerfile（使用 write_file）
-4. 如果依赖 MySQL/Redis 等外部服务，生成 docker-compose.yml
-5. 修改配置文件中的连接地址（localhost → Docker 服务名）
-
-完成后返回 JSON 格式的结果。"""
+            logger.info("deploy_agent result: status=%s issues=%d fixed=%d",
+                        result.get("status"), len(result.get("issues", [])), len(result.get("fixed_files", [])))
+            services_list = project_info.get("services") or []
+            return {
+                "executable_services": [s["name"] for s in services_list
+                                        if isinstance(s, dict) and s.get("type") not in ("common", "library")],
+                "modified_files": result.get("fixed_files", []),
+                "compose_generated": False,
+                "summary": f"Agent reviewed: {len(result.get('issues', []))} issues found, {len(result.get('fixed_files', []))} files fixed"
             }
-        ]
-
-        tools = [
-            {
-                "name": "read_file",
-                "description": "读取文件内容",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "文件绝对路径"}
-                    },
-                    "required": ["file_path"]
-                }
-            },
-            {
-                "name": "write_file",
-                "description": "写入文件内容",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "文件绝对路径"},
-                        "content": {"type": "string", "description": "文件内容"}
-                    },
-                    "required": ["file_path", "content"]
-                }
-            },
-            {
-                "name": "list_files",
-                "description": "列出目录中的文件",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "directory": {"type": "string", "description": "目录绝对路径"}
-                    },
-                    "required": ["directory"]
-                }
-            }
-        ]
-
-        import logging as _log; _log.getLogger(__name__).info("review_project: about to call AI, tools=%d, messages=%d, system_len=%d", len(tools), len(messages), len(system_prompt or ''))
-        # 先尝试带工具的 AI 调用
-        result = self._call_ai(messages, tools=tools, system=system_prompt)
-
-        # 如果工具调用模式失败（dashscope 可能不支持工具调用），回退到纯文本模式
-        if "error" in result:
-            error_str = str(result["error"])
-            if "400" not in error_str and "Bad Request" not in error_str:
-                # 非工具调用错误（如 API key 无效），直接返回
-                return {"skipped": True, "reason": result["error"], "executable_services": []}
-            # 工具调用模式不支持，回退到纯文本模式（不传 tools）
-            result = self._call_ai(messages, system=system_prompt)
-            if "error" in result:
-                return {"skipped": True, "reason": result["error"], "executable_services": []}
-
-        # 处理 AI 回复：收集文本 + 执行工具调用
-        final_text = ""
-        tool_calls_made = []
-        ai_content = result.get("content", [])
-        for block in ai_content:
-            if block.get("type") == "text":
-                final_text += block.get("text", "")
-            elif block.get("type") == "tool_use":
-                tool_result = self._execute_tool(block["name"], block.get("input", {}))
-                tool_calls_made.append({"tool": block["name"], "result": tool_result})
-
-        if tool_calls_made:
-            # dashscope 不支持第二轮工具结果回传（第二轮会 400）
-            # 工具已经在第一轮执行完毕（文件已写入），直接扫文件系统确认结果
-            import os as _os
-            dockerfiles_found = []
-            compose_found = False
-            for root, dirs, files in _os.walk(repo_dir):
-                dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "target", ".mvn", "__pycache__"}]
-                for f in files:
-                    if f == "Dockerfile":
-                        dockerfiles_found.append(_os.path.relpath(_os.path.join(root, f), repo_dir))
-                    elif f == "docker-compose.yml":
-                        compose_found = True
-
-            final_text = json.dumps({
-                "executable_services": [service["name"] for service in services
-                                         if service.get("type") != "common" and service.get("type") != "library"],
-                "modified_files": dockerfiles_found,
-                "compose_generated": compose_found,
-                "summary": f"AI executed {len(tool_calls_made)} tool calls. Found {len(dockerfiles_found)} Dockerfiles. compose={compose_found}"
-            }, ensure_ascii=False)
-
-        from json_repair import repair_json
-        parsed = repair_json(final_text)
-        if isinstance(parsed, dict):
-            return parsed
-        return {"executable_services": [], "modified_files": [], "compose_generated": False, "summary": final_text[:500]}
+        except Exception as e:
+            logger.error("deploy_agent failed: %s", e)
+            return {"executable_services": [], "modified_files": [], "compose_generated": False, "summary": str(e)}
 
     def review_docker_compose(self, compose_content: str, project_info: Dict, deps_info: Dict) -> Dict[str, Any]:
         """审核 docker-compose.yml"""

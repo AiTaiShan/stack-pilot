@@ -8,7 +8,7 @@
 """
 
 
-def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> str:
+def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "", version: str = "8.0") -> str:
     """生成 .NET Dockerfile 内容（多阶段构建）。
 
     Args:
@@ -20,12 +20,14 @@ def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "") -> 
     Returns:
         Dockerfile 内容字符串
     """
-    return f"""FROM mcr.microsoft.com/dotnet/sdk:8.0 AS builder
+    sdk_image = f"mcr.microsoft.com/dotnet/sdk:{version}"
+    runtime_image = f"mcr.microsoft.com/dotnet/aspnet:{version}"
+    return f"""FROM {sdk_image} AS builder
 WORKDIR /app
 COPY . .
 RUN {build_cmd or 'dotnet publish -c Release -o out'}
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+FROM {runtime_image}
 WORKDIR /app
 COPY --from=builder /app/out ./
 EXPOSE {port}

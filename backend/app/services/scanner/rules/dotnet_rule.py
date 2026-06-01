@@ -1,5 +1,6 @@
 """.NET (C#) 语言检测规则"""
 import os
+import re
 from .base_rule import BaseRule
 
 
@@ -11,6 +12,7 @@ class DotnetRule(BaseRule):
 
     @classmethod
     def detect_language(cls, files: list) -> bool:
+        """根目录文件列表快速检测"""
         for f in files:
             if f.endswith(".csproj") or f.endswith(".sln"):
                 return True
@@ -28,35 +30,81 @@ class DotnetRule(BaseRule):
             "port": 5000,
         }
 
-        # Check for .csproj or .sln files
-        has_csproj = False
-        has_sln = False
-        csproj_path = None
+        # 1. 搜索 .sln 和 .csproj（支持子目录，深度 3）
+        sln_path = None
+        csproj_files = []
 
-        try:
-            for entry in os.listdir(dir_path):
-                full_path = os.path.join(dir_path, entry)
-                if not os.path.isfile(full_path):
-                    continue
-                if entry.endswith(".csproj"):
-                    has_csproj = True
-                    csproj_path = full_path
-                elif entry.endswith(".sln"):
-                    has_sln = True
-        except Exception:
-            pass
+        for root, dirs, files in os.walk(dir_path):
+            depth = root.replace(dir_path, "").count(os.sep)
+            if depth > 3:
+                dirs.clear()
+                continue
+            dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "bin", "obj", "packages"}]
+            for f in files:
+                full = os.path.join(root, f)
+                if f.endswith(".sln") and not sln_path:
+                    sln_path = full
+                elif f.endswith(".csproj"):
+                    csproj_files.append(full)
 
-        if not has_csproj and not has_sln:
+        if not csproj_files and not sln_path:
             return result
 
-        # 入口点：.NET 项目的标准入口点是 Program.cs
-        result["entry_point"] = "Program.cs"
+        # 2. 选择主 .csproj（优先 Web 项目，其次第一个）
+        main_csproj = None
+        for csproj in csproj_files:
+            try:
+                with open(csproj, errors="ignore") as f:
+                    content = f.read()
+                if "Microsoft.NET.Sdk.Web" in content:
+                    main_csproj = csproj
+                    break
+            except Exception:
+                pass
+        if not main_csproj and csproj_files:
+            main_csproj = csproj_files[0]
 
-        # 框架检测：读取 .csproj 中的 SDK 和 PackageReference
-        if csproj_path:
-            result["framework"] = cls._detect_framework(csproj_path)
+        # 3. 框架检测
+        if main_csproj:
+            result["framework"] = cls._detect_framework(main_csproj)
 
-        # 包管理器检测
+        # 4. 版本检测
+        for csproj in csproj_files:
+            try:
+                with open(csproj, errors="ignore") as f:
+                    content = f.read()
+                m = re.search(r'<TargetFramework>(?:net|netstandard|netcoreapp)([\d.]+)', content)
+                if m:
+                    result["version"] = m.group(1)
+                    break
+            except Exception:
+                pass
+
+        # 5. 入口点检测（查找 Program.cs，优先 Web 项目目录）
+        for csproj in csproj_files:
+            proj_dir = os.path.dirname(csproj)
+            program_cs = os.path.join(proj_dir, "Program.cs")
+            if os.path.isfile(program_cs):
+                rel = os.path.relpath(program_cs, dir_path)
+                result["entry_point"] = rel
+                # 如果是 Web 项目，优先使用
+                try:
+                    with open(csproj, errors="ignore") as f:
+                        if "Microsoft.NET.Sdk.Web" in f.read():
+                            break
+                except Exception:
+                    pass
+
+        # fallback: 默认入口点
+        if not result["entry_point"]:
+            result["entry_point"] = "Program.cs"
+
+        # 6. 启动命令（多项目时指定 --project，单项目用默认 dotnet run）
+        if main_csproj and len(csproj_files) > 1:
+            rel_csproj = os.path.relpath(main_csproj, dir_path)
+            result["start_command"] = f"dotnet run --project {rel_csproj}"
+
+        # 7. 包管理器
         if os.path.exists(os.path.join(dir_path, "paket.lock")):
             result["package_manager"] = "paket"
 
@@ -69,13 +117,22 @@ class DotnetRule(BaseRule):
             with open(csproj_path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
 
-            # 检测 Sdk="Microsoft.NET.Sdk.Web"
-            if "Microsoft.NET.Sdk.Web" in content:
-                return "aspnet"
+            framework_map = {
+                "Microsoft.NET.Sdk.Web": "aspnet",
+                "Microsoft.NET.Sdk.BlazorWebAssembly": "blazor",
+                "Microsoft.NET.Sdk.WindowsDesktop": "wpf",
+                "Microsoft.Maui.Controls": "maui",
+            }
+            for sdk, fw in framework_map.items():
+                if sdk in content:
+                    return fw
 
-            # 检测 PackageReference Include="Microsoft.AspNetCore"
             if "Microsoft.AspNetCore" in content:
                 return "aspnet"
+            if "UseWPF" in content:
+                return "wpf"
+            if "UseWindowsForms" in content:
+                return "winforms"
 
         except Exception:
             pass
