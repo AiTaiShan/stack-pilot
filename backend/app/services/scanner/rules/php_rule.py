@@ -1,7 +1,10 @@
-import json
+"""PHP 语言检测规则"""
 import os
 import re
+from typing import Optional
+
 from .base_rule import BaseRule
+from .context import ProjectContext
 
 
 class PhpRule(BaseRule):
@@ -11,11 +14,15 @@ class PhpRule(BaseRule):
         return "php"
 
     @classmethod
-    def detect_language(cls, files: list) -> bool:
-        return "composer.json" in files
+    def detect_language(cls, files: list) -> float:
+        if "composer.json" in files:
+            return 1.0
+        if any(f.endswith(".php") for f in files):
+            return 0.3
+        return 0.0
 
     @classmethod
-    def detect(cls, dir_path: str) -> dict:
+    def detect(cls, ctx: ProjectContext) -> Optional[dict]:
         result = {
             "language": "php",
             "framework": "",
@@ -26,25 +33,17 @@ class PhpRule(BaseRule):
             "port": 80,
         }
 
-        composer_path = os.path.join(dir_path, "composer.json")
-        if not os.path.exists(composer_path):
-            return result
-
-        # 读取 composer.json
-        try:
-            with open(composer_path, "r", encoding="utf-8", errors="ignore") as f:
-                composer = json.load(f)
-        except Exception:
+        composer = ctx.read_json("composer.json")
+        if composer is None:
             return result
 
         # 包管理器检测
-        if os.path.exists(os.path.join(dir_path, "composer.lock")):
+        if ctx.exists("composer.lock"):
             result["package_manager"] = "composer"
 
         # 框架检测：读取 require 中的框架依赖
         requires = composer.get("require", {})
         if requires:
-            # 依赖指纹匹配（按流行度排序）
             php_framework_map = [
                 ("laravel/framework", "laravel"),
                 ("symfony/framework-bundle", "symfony"),
@@ -72,14 +71,12 @@ class PhpRule(BaseRule):
                 result["version"] = m.group(1)
 
         # 入口点检测
-        # Laravel 项目优先使用 artisan（开发），生产用 php-fpm + public/index.php
-        if result["framework"] == "laravel" and os.path.isfile(os.path.join(dir_path, "artisan")):
+        if result["framework"] == "laravel" and ctx.is_file("artisan"):
             result["entry_point"] = "artisan"
             result["start_command"] = "php artisan serve"
         else:
-            # 通用 PHP 入口点
             for entry in ["index.php", "public/index.php", "server.php"]:
-                if os.path.isfile(os.path.join(dir_path, entry)):
+                if ctx.is_file(entry):
                     result["entry_point"] = entry
                     result["start_command"] = "php -S 0.0.0.0:80"
                     break

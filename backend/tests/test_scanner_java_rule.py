@@ -2,19 +2,20 @@
 import os
 import pytest
 from app.services.scanner.rules.java_rule import JavaRule
+from app.services.scanner.rules.context import ProjectContext
 
 
 def test_detect_language_with_pom_xml():
-    assert JavaRule.detect_language(["pom.xml"]) == True
+    assert JavaRule.detect_language(["pom.xml"]) >= 0.5
 
 
 def test_detect_language_with_build_gradle():
-    assert JavaRule.detect_language(["build.gradle"]) == True
+    assert JavaRule.detect_language(["build.gradle"]) >= 0.5
 
 
 def test_detect_language_without_java_files():
-    assert JavaRule.detect_language(["package.json"]) == False
-    assert JavaRule.detect_language(["requirements.txt"]) == False
+    assert JavaRule.detect_language(["package.json"]) < 0.5
+    assert JavaRule.detect_language(["requirements.txt"]) < 0.5
 
 
 def test_detect_basic_java_app(tmpdir):
@@ -37,7 +38,8 @@ public class Application {
         System.out.println("Hello");
     }
 }""")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["language"] == "java"
     assert result["entry_point"] == "com.example.Application"
     assert result["package_manager"] == "maven"
@@ -61,7 +63,8 @@ def test_detect_spring_boot_framework(tmpdir):
     </dependency>
   </dependencies>
 </project>""")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["framework"] == "spring-boot"
 
 
@@ -89,7 +92,8 @@ public class DemoApplication {
         SpringApplication.run(DemoApplication.class, args);
     }
 }""")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["entry_point"] == "com.example.DemoApplication"
 
 
@@ -105,7 +109,8 @@ def test_detect_mybatis_framework(tmpdir):
     </dependency>
   </dependencies>
 </project>""")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["framework"] == "mybatis"
 
 
@@ -120,7 +125,8 @@ def test_detect_quarkus_framework(tmpdir):
     </dependency>
   </dependencies>
 </project>""")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["framework"] == "quarkus"
 
 
@@ -147,7 +153,8 @@ dependencies {
 public class App {
     public static void main(String[] args) {}
 }""")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["language"] == "java"
     assert result["package_manager"] == "gradle"
     assert result["build_command"] == "gradle build"
@@ -163,7 +170,8 @@ def test_detect_port_from_application_properties(tmpdir):
     prop_path = os.path.join(res_dir, "application.properties")
     with open(prop_path, "w") as f:
         f.write("server.port=9090\nspring.application.name=test\n")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["port"] == 9090
 
 
@@ -176,7 +184,8 @@ def test_detect_port_from_application_yml(tmpdir):
     yml_path = os.path.join(res_dir, "application.yml")
     with open(yml_path, "w") as f:
         f.write("server:\n  port: 8081\n")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["port"] == 8081
 
 
@@ -184,7 +193,8 @@ def test_detect_default_port(tmpdir):
     pom_path = os.path.join(str(tmpdir), "pom.xml")
     with open(pom_path, "w") as f:
         f.write("<project></project>")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["port"] == 8080
 
 
@@ -201,7 +211,8 @@ def test_no_main_class_found(tmpdir):
 public class Util {
     public static String helper() { return "ok"; }
 }""")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["entry_point"] is None
 
 
@@ -209,7 +220,8 @@ def test_detect_no_src_main_java(tmpdir):
     pom_path = os.path.join(str(tmpdir), "pom.xml")
     with open(pom_path, "w") as f:
         f.write("<project></project>")
-    result = JavaRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = JavaRule.detect(ctx)
     assert result["entry_point"] is None
 
 

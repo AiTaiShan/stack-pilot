@@ -1,7 +1,10 @@
-'''Rust 语言检测规则'''
+"""Rust 语言检测规则"""
 import os
 import re
+from typing import Optional
+
 from .base_rule import BaseRule
+from .context import ProjectContext
 
 
 class RustRule(BaseRule):
@@ -11,11 +14,15 @@ class RustRule(BaseRule):
         return "rust"
 
     @classmethod
-    def detect_language(cls, files: list) -> bool:
-        return "Cargo.toml" in files
+    def detect_language(cls, files: list) -> float:
+        if "Cargo.toml" in files:
+            return 1.0
+        if any(f.endswith(".rs") for f in files):
+            return 0.4
+        return 0.0
 
     @classmethod
-    def detect(cls, dir_path: str) -> dict:
+    def detect(cls, ctx: ProjectContext) -> Optional[dict]:
         result = {
             "language": "rust",
             "framework": "",
@@ -26,14 +33,8 @@ class RustRule(BaseRule):
             "port": 8080,
         }
 
-        cargo_path = os.path.join(dir_path, "Cargo.toml")
-        if not os.path.exists(cargo_path):
-            return result
-
-        try:
-            with open(cargo_path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-        except Exception:
+        content = ctx.read_text("Cargo.toml")
+        if content is None:
             return result
 
         # ---------- 读取包名 ----------
@@ -46,7 +47,6 @@ class RustRule(BaseRule):
                 package_name = name_match.group(1)
 
         # ---------- 框架检测 ----------
-        # 提取 [dependencies] 内容（包括 [dependencies.xxx] 段）
         deps_sections = re.findall(r'\[dependencies[^\]]*\](.*?)(?:\n\[|$)', content, re.DOTALL)
         deps_content = "\n".join(deps_sections)
         framework_map = {
@@ -65,19 +65,16 @@ class RustRule(BaseRule):
             if members:
                 member_paths = re.findall(r'"([^"]+)"', members[0])
                 for member in member_paths:
-                    member_cargo = os.path.join(dir_path, member, "Cargo.toml")
-                    if os.path.exists(member_cargo):
-                        try:
-                            with open(member_cargo, errors="ignore") as f:
-                                member_content = f.read()
-                            member_deps = re.findall(r'\[dependencies[^\]]*\](.*?)(?:\n\[|$)', member_content, re.DOTALL)
-                            member_deps_content = "\n".join(member_deps)
-                            for dep, fw in framework_map.items():
-                                if dep in member_deps_content:
-                                    result["framework"] = fw
-                                    break
-                        except Exception:
-                            pass
+                    member_content = ctx.read_text(os.path.join(member, "Cargo.toml"))
+                    if member_content:
+                        member_deps = re.findall(
+                            r'\[dependencies[^\]]*\](.*?)(?:\n\[|$)', member_content, re.DOTALL
+                        )
+                        member_deps_content = "\n".join(member_deps)
+                        for dep, fw in framework_map.items():
+                            if dep in member_deps_content:
+                                result["framework"] = fw
+                                break
                     if result["framework"]:
                         break
 
@@ -91,12 +88,11 @@ class RustRule(BaseRule):
             result["version"] = edition_match.group(1)
 
         # ---------- 入口点检测 ----------
-        main_rs = os.path.join(dir_path, "src", "main.rs")
-        if os.path.isfile(main_rs):
+        if ctx.is_file("src/main.rs"):
             result["entry_point"] = "src/main.rs"
 
         # ---------- 包管理器确认 ----------
-        if os.path.exists(os.path.join(dir_path, "Cargo.lock")):
+        if ctx.exists("Cargo.lock"):
             result["package_manager"] = "cargo"
 
         # ---------- 启动命令 ----------

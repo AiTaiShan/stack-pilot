@@ -1,27 +1,26 @@
 import os
 import pytest
 from app.services.scanner.rules.rust_rule import RustRule
+from app.services.scanner.rules.context import ProjectContext
 
 
 def test_detect_language_with_cargo_toml():
-    assert RustRule.detect_language(["Cargo.toml"]) == True
+    assert RustRule.detect_language(["Cargo.toml"]) >= 0.5
 
 
 def test_detect_language_without_cargo_toml():
-    assert RustRule.detect_language(["package.json"]) == False
+    assert RustRule.detect_language(["package.json"]) < 0.5
 
 
 def test_detect_basic_rust_app(tmpdir):
-    # 创建 Cargo.toml
     with open(os.path.join(str(tmpdir), "Cargo.toml"), "w") as f:
         f.write('[package]\nname = "my-app"\nversion = "0.1.0"\nedition = "2021"\n')
-    # 创建 src/main.rs
     src_dir = os.path.join(str(tmpdir), "src")
     os.makedirs(src_dir)
     with open(os.path.join(src_dir, "main.rs"), "w") as f:
         f.write('fn main() { println!("Hello, world!"); }')
-
-    result = RustRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = RustRule.detect(ctx)
     assert result["language"] == "rust"
     assert result["entry_point"] == "src/main.rs"
     assert result["package_manager"] == "cargo"
@@ -37,8 +36,8 @@ def test_detect_actix_web_framework(tmpdir):
     os.makedirs(src_dir)
     with open(os.path.join(src_dir, "main.rs"), "w") as f:
         f.write('fn main() {}')
-
-    result = RustRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = RustRule.detect(ctx)
     assert result["framework"] == "actix-web"
 
 
@@ -49,8 +48,8 @@ def test_detect_rocket_framework(tmpdir):
     os.makedirs(src_dir)
     with open(os.path.join(src_dir, "main.rs"), "w") as f:
         f.write('fn main() {}')
-
-    result = RustRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = RustRule.detect(ctx)
     assert result["framework"] == "rocket"
 
 
@@ -61,8 +60,8 @@ def test_detect_axum_framework(tmpdir):
     os.makedirs(src_dir)
     with open(os.path.join(src_dir, "main.rs"), "w") as f:
         f.write('fn main() {}')
-
-    result = RustRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = RustRule.detect(ctx)
     assert result["framework"] == "axum"
 
 
@@ -75,8 +74,8 @@ def test_detect_cargo_lock_package_manager(tmpdir):
     os.makedirs(src_dir)
     with open(os.path.join(src_dir, "main.rs"), "w") as f:
         f.write('fn main() {}')
-
-    result = RustRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = RustRule.detect(ctx)
     assert result["package_manager"] == "cargo"
 
 
@@ -84,14 +83,15 @@ def test_detect_without_src_main(tmpdir):
     """Cargo.toml 存在但没有 src/main.rs，entry_point 应为 None"""
     with open(os.path.join(str(tmpdir), "Cargo.toml"), "w") as f:
         f.write('[package]\nname = "no-entry"\n')
-    # 不创建 src 目录
-    result = RustRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = RustRule.detect(ctx)
     assert result["entry_point"] is None
 
 
 def test_detect_without_cargo_toml(tmpdir):
     """没有 Cargo.toml 时返回默认值"""
-    result = RustRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = RustRule.detect(ctx)
     assert result["language"] == "rust"
     assert result["framework"] == ""
     assert result["entry_point"] is None

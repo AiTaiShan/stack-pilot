@@ -1,7 +1,10 @@
 """Python 语言检测规则"""
 import os
 import re
+from typing import Optional
+
 from .base_rule import BaseRule
+from .context import ProjectContext
 
 
 class PythonRule(BaseRule):
@@ -11,12 +14,16 @@ class PythonRule(BaseRule):
         return "python"
 
     @classmethod
-    def detect_language(cls, files: list) -> bool:
+    def detect_language(cls, files: list) -> float:
         indicators = ["requirements.txt", "pyproject.toml", "setup.py", "Pipfile"]
-        return any(f in files for f in indicators)
+        if any(f in files for f in indicators):
+            return 1.0
+        if any(f.endswith(".py") for f in files):
+            return 0.3
+        return 0.0
 
     @classmethod
-    def detect(cls, dir_path: str) -> dict:
+    def detect(cls, ctx: ProjectContext) -> Optional[dict]:
         result = {
             "language": "python",
             "framework": "",
@@ -26,43 +33,40 @@ class PythonRule(BaseRule):
             "start_command": None,
             "port": 8000,
         }
-        files = os.listdir(dir_path)
+        files, _ = ctx.list_dir(".")
 
         # 框架检测
-        if "manage.py" in files and os.path.isfile(os.path.join(dir_path, "manage.py")):
+        if "manage.py" in files and ctx.is_file("manage.py"):
             result["framework"] = "django"
         else:
             # 检查依赖文件中的框架（含 Pipfile）
             for dep_file in ["requirements.txt", "pyproject.toml", "setup.py", "Pipfile"]:
-                dep_path = os.path.join(dir_path, dep_file)
-                if os.path.exists(dep_path):
-                    try:
-                        content = open(dep_path, errors="ignore").read().lower()
-                        # 依赖指纹匹配（按流行度排序）
-                        py_framework_map = [
-                            ("fastapi", "fastapi"),
-                            ("django", "django"),
-                            ("flask", "flask"),
-                            ("odoo", "odoo"),
-                            ("openerp", "odoo"),
-                            ("frappe", "frappe"),
-                            ("tornado", "tornado"),
-                            ("sanic", "sanic"),
-                            ("aiohttp", "aiohttp"),
-                            ("bottle", "bottle"),
-                            ("pyramid", "pyramid"),
-                        ]
-                        for dep, fw in py_framework_map:
-                            if dep in content:
-                                result["framework"] = fw
-                                break
-                    except Exception:
-                        pass
+                content = ctx.read_text(dep_file)
+                if content is not None:
+                    content_lower = content.lower()
+                    # 依赖指纹匹配（按流行度排序）
+                    py_framework_map = [
+                        ("fastapi", "fastapi"),
+                        ("django", "django"),
+                        ("flask", "flask"),
+                        ("odoo", "odoo"),
+                        ("openerp", "odoo"),
+                        ("frappe", "frappe"),
+                        ("tornado", "tornado"),
+                        ("sanic", "sanic"),
+                        ("aiohttp", "aiohttp"),
+                        ("bottle", "bottle"),
+                        ("pyramid", "pyramid"),
+                    ]
+                    for dep, fw in py_framework_map:
+                        if dep in content_lower:
+                            result["framework"] = fw
+                            break
                     break
 
         # 入口点检测
         for entry in ["main.py", "app.py", "manage.py", "server.py", "wsgi.py"]:
-            if entry in files and os.path.isfile(os.path.join(dir_path, entry)):
+            if entry in files and ctx.is_file(entry):
                 result["entry_point"] = entry
                 if entry == "manage.py":
                     result["start_command"] = "python manage.py runserver 0.0.0.0:8000"
@@ -75,7 +79,7 @@ class PythonRule(BaseRule):
         # 包管理器检测（lock 文件优先，再检查 pyproject.toml build-system）
         lock_map = {"poetry.lock": "poetry", "Pipfile.lock": "pipenv", "uv.lock": "uv"}
         for lock, mgr in lock_map.items():
-            if os.path.exists(os.path.join(dir_path, lock)):
+            if ctx.exists(lock):
                 result["package_manager"] = mgr
                 if mgr == "poetry":
                     result["build_command"] = "poetry install"
@@ -87,15 +91,11 @@ class PythonRule(BaseRule):
 
         # 从 pyproject.toml build-system 推断包管理器
         if result["package_manager"] == "pip":
-            pyproject_path = os.path.join(dir_path, "pyproject.toml")
-            if os.path.exists(pyproject_path):
-                try:
-                    with open(pyproject_path, errors="ignore") as f:
-                        content = f.read()
-                    build_backend = ""
-                    m = re.search(r'build-backend\s*=\s*"([^"]+)"', content)
-                    if m:
-                        build_backend = m.group(1)
+            content = ctx.read_text("pyproject.toml")
+            if content is not None:
+                m = re.search(r'build-backend\s*=\s*"([^"]+)"', content)
+                if m:
+                    build_backend = m.group(1)
                     if "poetry" in build_backend:
                         result["package_manager"] = "poetry"
                         result["build_command"] = "poetry install"
@@ -104,37 +104,29 @@ class PythonRule(BaseRule):
                     elif "hatchling" in build_backend:
                         result["package_manager"] = "hatch"
                         result["build_command"] = "hatch build"
-                except Exception:
-                    pass
 
         # 版本检测
         for dep_file in ["runtime.txt", "pyproject.toml", "Pipfile"]:
-            dep_path = os.path.join(dir_path, dep_file)
-            if os.path.exists(dep_path):
-                try:
-                    with open(dep_path, errors="ignore") as f:
-                        content = f.read()
-                        # runtime.txt: "python-3.11.x"
-                        m = re.search(r'python-?(\d+\.\d+)', content)
-                        if m:
-                            result["version"] = m.group(1)
-                        # pyproject.toml: requires-python = ">=3.11" / "~=3.10" / ">=3.8,<4.0"
-                        m = re.search(r'requires-python\s*=\s*["\']([><=~!^]*\s*\d+\.\d+)', content)
-                        if m:
-                            # 提取纯版本号
-                            ver = re.search(r'(\d+\.\d+)', m.group(1))
-                            if ver:
-                                result["version"] = ver.group(1)
-                        # Pipfile: python_version = "3.11" 或 python_full_version = "3.11.0"
-                        m = re.search(r'python_(?:full_)?version\s*=\s*["\'](\d+\.\d+)', content)
-                        if m and "version" not in result:
-                            result["version"] = m.group(1)
-                except Exception:
-                    pass
+            content = ctx.read_text(dep_file)
+            if content is not None:
+                # runtime.txt: "python-3.11.x"
+                m = re.search(r'python-?(\d+\.\d+)', content)
+                if m:
+                    result["version"] = m.group(1)
+                # pyproject.toml: requires-python = ">=3.11" / "~=3.10" / ">=3.8,<4.0"
+                m = re.search(r'requires-python\s*=\s*["\']([><=~!^]*\s*\d+\.\d+)', content)
+                if m:
+                    ver = re.search(r'(\d+\.\d+)', m.group(1))
+                    if ver:
+                        result["version"] = ver.group(1)
+                # Pipfile: python_version = "3.11" 或 python_full_version = "3.11.0"
+                m = re.search(r'python_(?:full_)?version\s*=\s*["\'](\d+\.\d+)', content)
+                if m and "version" not in result:
+                    result["version"] = m.group(1)
                 break
 
         # ASGI 检测（FastAPI / Django Channels）
-        has_asgi = os.path.exists(os.path.join(dir_path, "asgi.py"))
+        has_asgi = ctx.exists("asgi.py")
 
         # 框架级启动命令定制
         if result["framework"] == "fastapi":
@@ -145,7 +137,7 @@ class PythonRule(BaseRule):
         elif result["framework"] == "django" and has_asgi:
             result["start_command"] = "daphne -b 0.0.0.0 -p 8000 config.asgi:application"
         elif result["framework"] == "odoo":
-            if os.path.isfile(os.path.join(dir_path, "odoo-bin")):
+            if ctx.is_file("odoo-bin"):
                 result["entry_point"] = "odoo-bin"
                 result["start_command"] = "python odoo-bin -c odoo.conf"
             result["port"] = 8069

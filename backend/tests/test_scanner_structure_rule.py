@@ -6,12 +6,14 @@ from app.services.scanner.rules.structure_rule import (
     detect_microservices,
     detect_monorepo,
 )
+from app.services.scanner.rules.context import ProjectContext
 
 
-def test_detect_project_type_single():
-    files = ["package.json", "README.md"]
-    dirs = ["src", "test"]
-    assert detect_project_type(files, dirs) == "single"
+def test_detect_project_type_single(tmpdir):
+    with open(os.path.join(str(tmpdir), "package.json"), "w") as f:
+        f.write("{}")
+    ctx = ProjectContext(str(tmpdir))
+    assert detect_project_type(ctx) == "single"
 
 
 def test_detect_project_type_monorepo(tmpdir):
@@ -19,7 +21,8 @@ def test_detect_project_type_monorepo(tmpdir):
     backend = tmpdir.mkdir("backend")
     frontend.join("package.json").write("{}")
     backend.join("requirements.txt").write("")
-    result = detect_monorepo(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = detect_monorepo(ctx)
     assert result is not None
     assert result["type"] == "monorepo"
     assert result["frontend"]["language"] == "node"
@@ -32,7 +35,8 @@ def test_detect_microservices(tmpdir):
     svc_b = svcs.mkdir("order-service")
     svc_a.join("package.json").write("{}")
     svc_b.join("package.json").write("{}")
-    result = detect_microservices(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = detect_microservices(ctx)
     assert result is not None
     assert len(result["services"]) >= 2
 
@@ -55,16 +59,16 @@ def test_detect_multi_module_java(tmpdir):
     order = tmpdir.mkdir("order-service")
     order.join("pom.xml").write("<project><artifactId>order</artifactId></project>")
     order.mkdir("src").mkdir("main").mkdir("java")
-    result = detect_multi_module_java(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = detect_multi_module_java(ctx)
     assert result is not None
     assert result["type"] == "multi-module-java"
     assert len(result["services"]) >= 2
 
 
 def test_detect_none_match(tmpdir):
-    files = ["README.md"]
-    dirs = ["docs"]
-    assert detect_project_type(files, dirs) == "single"
-    assert detect_microservices(str(tmpdir)) is None
-    assert detect_monorepo(str(tmpdir)) is None
-    assert detect_multi_module_java(str(tmpdir)) is None
+    ctx = ProjectContext(str(tmpdir))
+    assert detect_project_type(ctx) == "single"
+    assert detect_microservices(ctx) is None
+    assert detect_monorepo(ctx) is None
+    assert detect_multi_module_java(ctx) is None

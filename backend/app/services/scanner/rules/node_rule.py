@@ -1,8 +1,10 @@
 """Node.js / TypeScript 语言检测规则"""
-import json
 import os
 import re
+from typing import Optional
+
 from .base_rule import BaseRule
+from .context import ProjectContext
 
 
 class NodeRule(BaseRule):
@@ -12,11 +14,15 @@ class NodeRule(BaseRule):
         return "node"
 
     @classmethod
-    def detect_language(cls, files: list) -> bool:
-        return "package.json" in files
+    def detect_language(cls, files: list) -> float:
+        if "package.json" in files:
+            return 1.0
+        if any(f.endswith((".js", ".ts", ".mjs", ".cjs")) for f in files):
+            return 0.3
+        return 0.0
 
     @classmethod
-    def detect(cls, dir_path: str) -> dict:
+    def detect(cls, ctx: ProjectContext) -> Optional[dict]:
         result = {
             "language": "node",
             "framework": "",
@@ -26,45 +32,37 @@ class NodeRule(BaseRule):
             "start_command": "npm start",
             "port": 3000,
         }
-        pkg_path = os.path.join(dir_path, "package.json")
-        if not os.path.exists(pkg_path):
+        pkg = ctx.read_json("package.json")
+        if pkg is None:
             return result
-
-        with open(pkg_path) as f:
-            pkg = json.load(f)
 
         # 框架检测（根目录 package.json）
         deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
         frontend_only_frameworks = {"react", "vue", "svelte", "solidjs", "preact"}
 
-        result["framework"] = cls._detect_framework_from_deps(deps, dir_path)
+        result["framework"] = cls._detect_framework_from_deps(deps, ctx)
 
         # 如果根目录是纯前端框架，扫描子目录的 package.json 查找后端框架
         if result["framework"] in frontend_only_frameworks:
             for sub in ["backend", "server", "api", "packages/api", "packages/server"]:
-                sub_pkg = os.path.join(dir_path, sub, "package.json")
-                if os.path.exists(sub_pkg):
-                    try:
-                        with open(sub_pkg) as f:
-                            sub_pkg_data = json.load(f)
-                        sub_deps = {**sub_pkg_data.get("dependencies", {}),
-                                    **sub_pkg_data.get("devDependencies", {})}
-                        sub_fw = cls._detect_framework_from_deps(sub_deps, os.path.join(dir_path, sub))
-                        if sub_fw and sub_fw not in frontend_only_frameworks:
-                            result["framework"] = sub_fw
-                            # 入口点也指向子目录
-                            for entry in ["server.js", "index.js", "app.js", "src/main.ts", "src/main.js"]:
-                                if os.path.exists(os.path.join(dir_path, sub, entry)):
-                                    result["entry_point"] = f"{sub}/{entry}"
-                                    break
-                            break
-                    except Exception:
-                        pass
+                sub_pkg = ctx.read_json(os.path.join(sub, "package.json"))
+                if sub_pkg is not None:
+                    sub_deps = {**sub_pkg.get("dependencies", {}),
+                                **sub_pkg.get("devDependencies", {})}
+                    sub_fw = cls._detect_framework_from_deps(sub_deps, ctx, sub)
+                    if sub_fw and sub_fw not in frontend_only_frameworks:
+                        result["framework"] = sub_fw
+                        # 入口点也指向子目录
+                        for entry in ["server.js", "index.js", "app.js", "src/main.ts", "src/main.js"]:
+                            if ctx.exists(os.path.join(sub, entry)):
+                                result["entry_point"] = f"{sub}/{entry}"
+                                break
+                        break
 
         # 入口点检测（NestJS 标准入口 src/main.ts 优先）
         for entry in ["src/main.ts", "src/main.js", "app.js", "index.js", "server.js",
                        "app.ts", "index.ts", "server.ts"]:
-            if os.path.exists(os.path.join(dir_path, entry)):
+            if ctx.exists(entry):
                 result["entry_point"] = entry
                 break
 
@@ -79,7 +77,7 @@ class NodeRule(BaseRule):
         lock_map = {"pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn",
                     "package-lock.json": "npm", "bun.lockb": "bun"}
         for lock, mgr in lock_map.items():
-            if os.path.exists(os.path.join(dir_path, lock)):
+            if ctx.exists(lock):
                 result["package_manager"] = mgr
                 break
 
@@ -94,15 +92,11 @@ class NodeRule(BaseRule):
         # 版本检测：.nvmrc / .node-version
         if "version" not in result:
             for ver_file in [".nvmrc", ".node-version"]:
-                ver_path = os.path.join(dir_path, ver_file)
-                if os.path.exists(ver_path):
-                    try:
-                        with open(ver_path, errors="ignore") as f:
-                            ver = f.read().strip().lstrip("v")
-                            if ver:
-                                result["version"] = ver
-                    except Exception:
-                        pass
+                ver = ctx.read_text(ver_file)
+                if ver is not None:
+                    ver = ver.strip().lstrip("v")
+                    if ver:
+                        result["version"] = ver
                     break
 
         # 构建/启动命令
@@ -120,13 +114,15 @@ class NodeRule(BaseRule):
         return result
 
     @classmethod
-    def _detect_framework_from_deps(cls, deps: dict, dir_path: str = "") -> str:
+    def _detect_framework_from_deps(cls, deps: dict, ctx: ProjectContext,
+                                     sub_dir: str = "") -> str:
         """从 dependencies 检测框架"""
-        if "next" in deps or (dir_path and any(os.path.exists(os.path.join(dir_path, f)) for f in
-                                  ["next.config.js", "next.config.ts", "next.config.mjs"])):
+        prefix = sub_dir + "/" if sub_dir else ""
+        if "next" in deps or any(ctx.exists(prefix + f) for f in
+                                  ["next.config.js", "next.config.ts", "next.config.mjs"]):
             return "next"
-        if "nuxt" in deps or (dir_path and any(os.path.exists(os.path.join(dir_path, f)) for f in
-                                    ["nuxt.config.ts", "nuxt.config.js"])):
+        if "nuxt" in deps or any(ctx.exists(prefix + f) for f in
+                                    ["nuxt.config.ts", "nuxt.config.js"]):
             return "nuxt"
         if "@nestjs/core" in deps:
             return "nest"

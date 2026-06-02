@@ -1,6 +1,7 @@
 """.NET (C#) 语言检测规则测试"""
 import os
 from app.services.scanner.rules.dotnet_rule import DotnetRule
+from app.services.scanner.rules.context import ProjectContext
 
 
 def test_language_id():
@@ -12,17 +13,17 @@ def test_get_template_name():
 
 
 def test_detect_language_with_csproj():
-    assert DotnetRule.detect_language(["MyApp.csproj"]) == True
+    assert DotnetRule.detect_language(["MyApp.csproj"]) >= 0.5
 
 
 def test_detect_language_with_sln():
-    assert DotnetRule.detect_language(["MyApp.sln"]) == True
+    assert DotnetRule.detect_language(["MyApp.sln"]) >= 0.5
 
 
 def test_detect_language_without_dotnet_files():
-    assert DotnetRule.detect_language(["package.json"]) == False
-    assert DotnetRule.detect_language(["requirements.txt"]) == False
-    assert DotnetRule.detect_language(["main.py"]) == False
+    assert DotnetRule.detect_language(["package.json"]) < 0.5
+    assert DotnetRule.detect_language(["requirements.txt"]) < 0.5
+    assert DotnetRule.detect_language(["main.py"]) < 0.5
 
 
 def test_detect_basic_dotnet_app(tmpdir):
@@ -34,7 +35,8 @@ def test_detect_basic_dotnet_app(tmpdir):
     <TargetFramework>net8.0</TargetFramework>
   </PropertyGroup>
 </Project>''')
-    result = DotnetRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = DotnetRule.detect(ctx)
     assert result["language"] == "dotnet"
     assert result["framework"] == ""
     assert result["entry_point"] == "Program.cs"
@@ -56,7 +58,8 @@ def test_detect_aspnet_framework(tmpdir):
     <PackageReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 </Project>''')
-    result = DotnetRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = DotnetRule.detect(ctx)
     assert result["framework"] == "aspnet"
 
 
@@ -74,7 +77,8 @@ def test_detect_paket_package_manager(tmpdir):
         f.write('''NUGET
   remote: https://www.nuget.org
   FSharp.Core (7.0.0)''')
-    result = DotnetRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = DotnetRule.detect(ctx)
     assert result["package_manager"] == "paket"
 
 
@@ -85,7 +89,8 @@ def test_detect_with_sln_only(tmpdir):
 Microsoft Visual Studio Solution File
 Project("...") = "MyApp", "MyApp.csproj"
 ''')
-    result = DotnetRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = DotnetRule.detect(ctx)
     assert result["language"] == "dotnet"
     assert result["framework"] == ""
     assert result["entry_point"] == "Program.cs"
@@ -97,7 +102,8 @@ Project("...") = "MyApp", "MyApp.csproj"
 
 def test_detect_no_dotnet_files_returns_minimal(tmpdir):
     """当目录中没有 .csproj 或 .sln 文件时，返回最小默认值"""
-    result = DotnetRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = DotnetRule.detect(ctx)
     assert result["language"] == "dotnet"
     assert result["framework"] == ""
     assert result["entry_point"] is None

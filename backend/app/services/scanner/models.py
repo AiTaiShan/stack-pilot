@@ -59,3 +59,4 @@ class ScanResult:
     backend: Optional[BackendInfo] = None
     dependencies: dict = field(default_factory=dict)
     key_files: dict = field(default_factory=dict)
+    warnings: list = field(default_factory=list)

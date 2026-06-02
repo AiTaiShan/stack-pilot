@@ -2,14 +2,15 @@ import json
 import os
 import pytest
 from app.services.scanner.rules.php_rule import PhpRule
+from app.services.scanner.rules.context import ProjectContext
 
 
 def test_detect_language_with_composer_json():
-    assert PhpRule.detect_language(["composer.json"]) == True
+    assert PhpRule.detect_language(["composer.json"]) >= 0.5
 
 
 def test_detect_language_without_composer_json():
-    assert PhpRule.detect_language(["package.json"]) == False
+    assert PhpRule.detect_language(["package.json"]) < 0.5
 
 
 def test_detect_basic_php_app(tmpdir):
@@ -17,7 +18,8 @@ def test_detect_basic_php_app(tmpdir):
         json.dump({"name": "test/app", "require": {}}, f)
     with open(os.path.join(str(tmpdir), "index.php"), "w") as f:
         f.write("<?php echo 'hello';")
-    result = PhpRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = PhpRule.detect(ctx)
     assert result["language"] == "php"
     assert result["entry_point"] == "index.php"
     assert result["package_manager"] == "composer"
@@ -31,7 +33,8 @@ def test_detect_laravel_framework(tmpdir):
         json.dump({"require": {"laravel/framework": "10.0.0"}}, f)
     with open(os.path.join(str(tmpdir), "artisan"), "w") as f:
         f.write("<?php\n// Laravel artisan")
-    result = PhpRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = PhpRule.detect(ctx)
     assert result["framework"] == "laravel"
     assert result["entry_point"] == "artisan"
     assert result["start_command"] == "php artisan serve"
@@ -40,7 +43,8 @@ def test_detect_laravel_framework(tmpdir):
 def test_detect_symfony_framework(tmpdir):
     with open(os.path.join(str(tmpdir), "composer.json"), "w") as f:
         json.dump({"require": {"symfony/framework-bundle": "6.0.0"}}, f)
-    result = PhpRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = PhpRule.detect(ctx)
     assert result["framework"] == "symfony"
 
 
@@ -50,9 +54,9 @@ def test_detect_laravel_without_artisan(tmpdir):
         json.dump({"require": {"laravel/framework": "10.0.0"}}, f)
     with open(os.path.join(str(tmpdir), "index.php"), "w") as f:
         f.write("<?php echo 'hello';")
-    result = PhpRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = PhpRule.detect(ctx)
     assert result["framework"] == "laravel"
-    # 没有 artisan 文件时，退化为通用 PHP 入口检测
     assert result["entry_point"] == "index.php"
     assert result["start_command"] == "php -S 0.0.0.0:80"
 
@@ -62,7 +66,8 @@ def test_detect_composer_lock(tmpdir):
         json.dump({"name": "test/app"}, f)
     with open(os.path.join(str(tmpdir), "composer.lock"), "w") as f:
         json.dump({"packages": []}, f)
-    result = PhpRule.detect(str(tmpdir))
+    ctx = ProjectContext(str(tmpdir))
+    result = PhpRule.detect(ctx)
     assert result["package_manager"] == "composer"
 
 
