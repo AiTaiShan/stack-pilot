@@ -72,13 +72,18 @@ def detect_multi_module_java(ctx: ProjectContext) -> Optional[dict]:
                 mtype = "registry"
             elif "config" in nl:
                 mtype = "config"
+            # 从模块配置读取端口/框架
+            mod_port = _read_module_port(ctx, name) or 8080
+            mod_framework = _read_module_framework(ctx, name) or "spring"
+            mod_version = _read_module_version(ctx, name) or None
             services.append({
                 "name": name, "dir": name, "type": mtype,
-                "port": 8080, "language": "java", "framework": "spring",
+                "port": mod_port, "language": "java", "framework": mod_framework,
             })
         if services:
             return {"type": "multi-module-java", "language": "java",
-                    "framework": "spring-cloud", "services": services}
+                    "framework": "spring-cloud", "services": services,
+                    "version": mod_version}
     except Exception:
         pass
     return None
@@ -110,53 +115,67 @@ def detect_multi_module_gradle(ctx: ProjectContext) -> Optional[dict]:
     return None
 
 
-def detect_microservices(ctx: ProjectContext) -> Optional[dict]:
-    # 注意：不含 apps/（Turborepo/Nx 等 monorepo 常用 apps/）
-    # 含 app/（go-zero/Dubbo-go 微服务常用）
-    service_base_dirs = ["services", "microservices", "packages", "modules",
-                         "app", "api", "server", "backend", "workers", "components"]
-    services = []
-    for base in service_base_dirs:
-        if not ctx.is_dir(base):
-            continue
-        files, sub_dirs = ctx.list_dir(base)
-        for item in sub_dirs:
-            svc = _detect_service(ctx, os.path.join(base, item), item)
-            if svc:
-                svc["dir"] = f"{base}/{item}"
-                services.append(svc)
-        if services:
-            break
-
-    # 二级目录扫描（如 ruoyi-modules/ruoyi-system、pkg/api-gateway）
-    if not services:
-        _, root_dirs = ctx.list_dir(".")
-        for parent in root_dirs:
-            parent_lower = parent.lower()
-            if not any(kw in parent_lower for kw in ["module", "service", "component", "pkg"]):
+def detect_microservices(ctx: ProjectContext, base_dir: str = ".") -> Optional[dict]:
+    """递归扫描微服务项目：遍历所有子目录，检测有 pom.xml 或 package.json 的服务"""
+    import os
+    
+    skip_dirs = {".git", "node_modules", "target", ".mvn", "__pycache__",
+                 "dist", "build", ".idea", ".vscode", ".settings",
+                 "docs", "test", "tests", "sql", "bin", "script",
+                 "docker", "deploy", "resource", "resources",
+                 "classes", "generated-sources", "generated-test-sources"}
+    
+    def _scan(dir_path: str) -> list:
+        """递归扫描指定目录，返回找到的服务列表"""
+        import os
+        skip = skip_dirs | {".", ".."}
+        try:
+            entries = os.listdir(os.path.join(ctx.dir_path, dir_path)) if dir_path != "." else os.listdir(ctx.dir_path)
+        except (PermissionError, FileNotFoundError):
+            return []
+        
+        results = []
+        for entry in entries:
+            if entry.startswith(".") or entry in skip:
                 continue
-            _, sub_dirs = ctx.list_dir(parent)
-            for item in sub_dirs:
-                svc = _detect_service(ctx, os.path.join(parent, item), item)
+            
+            # 处理扫描入口的子目录
+            full_rel = os.path.join(dir_path, entry) if dir_path != "." else entry
+            full_abs = os.path.join(ctx.dir_path, full_rel)
+            if not os.path.isdir(full_abs):
+                continue
+            
+            # 检查该目录下的文件
+            try:
+                dir_entries = os.listdir(full_abs)
+            except (PermissionError, FileNotFoundError):
+                continue
+            
+            has_pom = "pom.xml" in dir_entries
+            has_pkg = "package.json" in dir_entries
+            has_src = "src" in dir_entries and os.path.isdir(os.path.join(full_abs, "src"))
+            
+            if (has_pom or has_pkg) and not has_pom and has_pkg:
+                # 纯前端模块（有 package.json 无 pom.xml）
+                svc = _detect_service(ctx, full_rel, entry)
                 if svc:
-                    svc["dir"] = f"{parent}/{item}"
-                    services.append(svc)
-            if len(services) >= 2:
-                break
-
-    # 也检测根目录下 xxx-service / xxx_api 模式
-    if not services:
-        _, root_dirs = ctx.list_dir(".")
-        for item in root_dirs:
-            if item.startswith(".") or item in ["docs", "test", "tests", "frontend", "web", "ui"]:
-                continue
-            if not (item.endswith("-service") or item.endswith("_service") or
-                    item.endswith("-api") or item.endswith("_api")):
-                continue
-            svc = _detect_service(ctx, item, item)
-            if svc:
-                svc["dir"] = item
-                services.append(svc)
+                    svc["dir"] = full_rel
+                    results.append(svc)
+            elif has_pom:
+                if has_src:
+                    # 有 src/ 的可部署服务
+                    svc = _detect_service(ctx, full_rel, entry)
+                    if svc:
+                        svc["dir"] = full_rel
+                        results.append(svc)
+                else:
+                    # 聚合模块（有 pom.xml 无 src/），递归扫描子目录
+                    results.extend(_scan(full_rel))
+            # 无 pom.xml 也无 package.json → 跳过
+        
+        return results
+    
+    services = _scan(base_dir)
     if len(services) >= 2:
         return {"type": "microservices", "services": services}
     return None
@@ -173,6 +192,12 @@ def _detect_service(ctx: ProjectContext, dir_path: str, name: str) -> Optional[d
         svc["language"] = "go"
     elif "pom.xml" in files or "build.gradle" in files:
         svc["language"] = "java"
+        # 读取微服务的 bootstrap.yml 或 application.yml 端口
+        svc_port = _read_service_port(ctx, dir_path)
+        if svc_port:
+            svc["port"] = svc_port
+        # 通用类型检测（common/service/gateway）
+        svc["type"] = _read_module_kind(name)
     elif "Cargo.toml" in files:
         svc["language"] = "rust"
     elif "composer.json" in files:
@@ -247,3 +272,146 @@ def detect_monorepo_modern(ctx: ProjectContext) -> Optional[dict]:
         if ctx.exists(file):
             return {"type": "monorepo", "tool": tool}
     return None
+
+
+def _read_module_port(ctx: ProjectContext, module_name: str) -> int:
+    """从模块的 application.yml 或 application.properties 中读取端口"""
+    import re
+    res_dir = os.path.join(ctx.dir_path, module_name, "src", "main", "resources")
+    # application.yml
+    yml_path = os.path.join(res_dir, "application.yml")
+    if os.path.exists(yml_path):
+        with open(yml_path, errors="ignore") as f:
+            content = f.read()
+        # YAML: server:
+        # YAML format: server:\n  port: N
+        m = re.search(r'server:\s*\n(?:\s*#.*\n)*\s*port:\s*(\d+)', content)
+        if m:
+            return int(m.group(1))
+        # server.port=xxx (properties 格式混在 yml 中)
+        m = re.search(r'server\.port\s*[:=]\s*(\d+)', content)
+        if m:
+            return int(m.group(1))
+    # application.properties
+    props_path = os.path.join(res_dir, "application.properties")
+    if os.path.exists(props_path):
+        with open(props_path, errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("server.port=") or line.startswith("server.port:"):
+                    try:
+                        return int(line.split("=")[1].strip())
+                    except:
+                        pass
+    # 如果 application.yml 没找到端口，查 bootstrap.yml（Spring Cloud 微服务）
+    for bp_name in ("bootstrap.yml", "bootstrap.yaml"):
+        bp_path = os.path.join(res_dir, bp_name)
+        if os.path.exists(bp_path):
+            with open(bp_path, errors="ignore") as f:
+                content = f.read()
+            m = re.search(r'server:\s*\n(?:\s*#.*\n)*\s*port:\s*(\d+)', content)
+            if m:
+                return int(m.group(1))
+            # bootstrap.yml 可能用 server: port: XX 格式
+            m = re.search(r'server:\s*port:\s*(\d+)', content)
+            if m:
+                return int(m.group(1))
+    return 8080
+
+
+def _read_module_version(ctx: ProjectContext, module_name: str) -> Optional[str]:
+    """从模块的 pom.xml 中读取 Java 版本"""
+    import re
+    pom_path = os.path.join(ctx.dir_path, module_name, "pom.xml")
+    if not os.path.exists(pom_path):
+        return None
+    with open(pom_path, errors="ignore") as f:
+        content = f.read()
+    # 先找子模块自己的 java.version
+    m = re.search(r'<java\.version>([^<]+)</java\.version>', content)
+    if m:
+        return m.group(1).strip()
+    # 再找 maven.compiler.source
+    m = re.search(r'<maven\.compiler\.source>([^<]+)</maven\.compiler\.source>', content)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _read_module_framework(ctx: ProjectContext, module_name: str) -> str:
+    """从模块的 pom.xml 中检测框架"""
+    import re
+    pom_path = os.path.join(ctx.dir_path, module_name, "pom.xml")
+    if not os.path.exists(pom_path):
+        return "spring"
+    with open(pom_path, errors="ignore") as f:
+        content = f.read().lower()
+    if "spring-cloud" in content or "spring.cloud" in content:
+        return "spring-cloud"
+    if "spring-boot-starter" in content or "spring-boot-maven-plugin" in content:
+        return "spring-boot"
+    if "mybatis-spring-boot" in content:
+        return "mybatis"
+    if "quarkus" in content:
+        return "quarkus"
+    return "spring-boot"
+
+
+def _read_module_kind(module_name: str) -> str:
+    """根据模块名判断类型：common/service/gateway/registry/config"""
+    nl = module_name.lower()
+    if "common" in nl or "util" in nl:
+        return "common"
+    if "gateway" in nl or "zuul" in nl:
+        return "gateway"
+    if "eureka" in nl or "registry" in nl:
+        return "registry"
+    if "config" in nl:
+        return "config"
+    return "service"
+
+
+def _read_service_port(ctx: ProjectContext, dir_path: str) -> Optional[int]:
+    """读取微服务端口：读 bootstrap.yml 获取 profile，再按优先级扫描各配置文件"""
+    import re, os
+
+    active_profile = None
+    port = None
+    full_path = os.path.join(ctx.dir_path, dir_path)
+
+    # 1. 读 bootstrap.yml 获取 active profile 和 server.port
+    for bp_name in ("bootstrap.yml", "bootstrap.yaml"):
+        bp_path = os.path.join(full_path, bp_name)
+        if not os.path.exists(bp_path):
+            continue
+        with open(bp_path, errors="ignore") as f:
+            content = f.read()
+        m = re.search(r'profiles:\s*\n\s+active:\s*(\S+)', content)
+        if m:
+            active_profile = m.group(1).strip().strip('"').strip("'")
+        m = re.search(r'server:\s*\n(?:\s*#.*\n)*\s*port:\s*(\d+)', content)
+        if m:
+            port = int(m.group(1))
+
+    # 2. 按优先级扫描配置文件
+    config_files = ["application.yml", "application.yaml"]
+    if active_profile:
+        config_files = [
+            f"application-{active_profile}.yml",
+            f"application-{active_profile}.yaml",
+        ] + config_files + [
+            f"bootstrap-{active_profile}.yml",
+            f"bootstrap-{active_profile}.yaml",
+        ]
+
+    for cf in config_files:
+        cf_path = os.path.join(full_path, cf)
+        if not os.path.exists(cf_path):
+            continue
+        with open(cf_path, errors="ignore") as f:
+            content = f.read()
+        m = re.search(r'server:\s*\n(?:\s*#.*\n)*\s*port:\s*(\d+)', content)
+        if m:
+            return int(m.group(1))
+
+    return port

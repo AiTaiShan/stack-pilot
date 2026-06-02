@@ -88,7 +88,7 @@ def step_deploy(db: Session, deployment_id: str, deployment: Deployment, git_ser
     elif platform == "coolify":
         _deploy_to_coolify(deployment, log_fn)
     elif platform == "local":
-        _deploy_to_local(db, deployment, git_service, log_fn)
+        _deploy_to_local(db, deployment, git_service, log_fn, deployment_id)
     else:
         raise AppError(
             code=ErrorCode.INVALID_PARAM,
@@ -97,7 +97,7 @@ def step_deploy(db: Session, deployment_id: str, deployment: Deployment, git_ser
         )
 
 
-def _deploy_to_local(db: Session, deployment: Deployment, git_service, log_fn):
+def _deploy_to_local(db: Session, deployment: Deployment, git_service, log_fn, deployment_id: str):
     """本地部署"""
     config = deployment.config or {}
     images = config.get("images", {})
@@ -112,7 +112,7 @@ def _deploy_to_local(db: Session, deployment: Deployment, git_service, log_fn):
     is_multi_service = config.get("type") in ("monorepo", "multi-module-java", "microservices") or config.get("compose")
 
     if is_multi_service or has_deps:
-        _deploy_compose_local(db, deployment, repo_dir, repo_name, log_fn)
+        _deploy_compose_local(db, deployment, repo_dir, repo_name, log_fn, deployment_id)
     else:
         app_name = config.get("app_name", "stackpilot-app")
         port = config.get("port", 8080)
@@ -141,7 +141,7 @@ def _deploy_to_local(db: Session, deployment: Deployment, git_service, log_fn):
         log_fn(db, str(deployment.id), "info", f"Deployed locally at http://localhost:{port}")
 
 
-def _deploy_compose_local(db: Session, deployment: Deployment, repo_dir: str, repo_name: str, log_fn):
+def _deploy_compose_local(db: Session, deployment: Deployment, repo_dir: str, repo_name: str, log_fn, deployment_id: str):
     """使用 docker-compose 部署"""
     compose_file = os.path.join(repo_dir, "docker-compose.yml")
     if not os.path.exists(compose_file):
@@ -159,16 +159,35 @@ def _deploy_compose_local(db: Session, deployment: Deployment, repo_dir: str, re
         capture_output=True, timeout=60
     )
 
+    # 预拉取外部镜像（避免 up 时超时）
+    log_fn(db, deployment_id, "info", "Pulling external images first...")
+    try:
+        subprocess.run(
+            ["docker-compose", "-p", project_name, "-f", compose_file, "pull"],
+            capture_output=True, text=True, timeout=600
+        )
+    except subprocess.TimeoutExpired:
+        log_fn(db, deployment_id, "warning", "Image pull timed out, continuing with local images")
+
     # 启动新服务
     result = subprocess.run(
         ["docker-compose", "-p", project_name, "-f", compose_file, "up", "-d"],
-        capture_output=True, text=True, timeout=120
+        capture_output=True, text=True, timeout=600
     )
 
-    if result.returncode != 0:
+    # 检查容器是否实际在运行（不依赖 returncode，docker-compose 可能因变量警告返回非零）
+    time.sleep(5)
+    check = subprocess.run(
+        ["docker-compose", "-p", project_name, "-f", compose_file, "ps", "-q"],
+        capture_output=True, text=True, timeout=15
+    )
+    running = [c.strip() for c in check.stdout.strip().split('\n') if c.strip()]
+    if not running:
+        # 没有容器在运行才视为失败
+        error_detail = result.stderr[:300] if result.stderr else "No containers started"
         raise AppError(
             code=ErrorCode.DOCKER_ERROR,
-            message=f"Docker Compose deploy failed: {result.stderr}",
+            message=f"Docker Compose deploy failed: {error_detail}",
             severity=ErrorSeverity.HIGH,
         )
 
@@ -322,8 +341,10 @@ def _verify_local_deployment(db: Session, deployment: Deployment, log_fn):
 
     if is_compose:
         project_name = f"stackpilot-{repo_name}"
+        repo_dir = config.get('_repo_dir', os.path.join('/tmp/stackpilot_repos', repo_name))
+        compose_file = os.path.join(repo_dir, 'docker-compose.yml')
         result = subprocess.run(
-            ["docker-compose", "-p", project_name, "ps", "-q"],
+            ["docker-compose", "-p", project_name, "-f", compose_file, "ps", "-q"],
             capture_output=True, text=True, timeout=15
         )
         container_ids = [c.strip() for c in result.stdout.strip().split('\n') if c.strip()]

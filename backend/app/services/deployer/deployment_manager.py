@@ -304,11 +304,11 @@ class DeploymentManager:
 
     def _step_push(self, db: Session, deployment_id: str, deployment: Deployment):
         from app.services.deployer.steps import deploy_step
-        return
+        deploy_step.step_push(db, deployment_id, deployment, self.docker_service, self._log)
 
     def _step_deploy(self, db: Session, deployment_id: str, deployment: Deployment):
         from app.services.deployer.steps import deploy_step
-        return
+        deploy_step.step_deploy(db, deployment_id, deployment, self.git_service, self._log)
 
     def _step_verify(self, db: Session, deployment_id: str, deployment: Deployment):
         from app.services.deployer.steps import deploy_step

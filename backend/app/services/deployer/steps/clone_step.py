@@ -110,6 +110,21 @@ def _detect_project_type(repo_dir: str, deployment, db: Session, deployment_id: 
         "version": scan_result.version if hasattr(scan_result, 'version') and scan_result.version else "",
     }
 
+    # 多模块 Java 项目：规则引擎未提取 version，这里主动读取 pom.xml
+    if scan_result.project_type in ("multi-module-java", "multi-module-java-with-frontend") and not detected.get("version"):
+        pom_path = os.path.join(repo_dir, "pom.xml")
+        if os.path.exists(pom_path):
+            import re as _re
+            with open(pom_path, errors="ignore") as _f:
+                _pom = _f.read()
+            _m = _re.search(r'<java\.version>([^<]+)</java\.version>', _pom)
+            if _m:
+                detected["version"] = _m.group(1).strip()
+                detected["java_version"] = int(detected["version"])
+                log_fn(db, deployment_id, "info",
+                       f"Detected Java version from pom.xml: {detected['version']}",
+                       details={"event": "java_version_detected", "version": detected["version"]})
+
     if scan_result.services:
         detected["services"] = [
             {"name": s.name, "dir": s.dir, "type": s.type, "port": s.port,
@@ -138,9 +153,10 @@ def _llm_review_detection(repo_dir: str, detected: dict, db: Session, deployment
     """调用 LLM 审核项目类型检测结果，修正错误并补充缺失信息"""
     from app.services.ai.ai_service import get_ai_service
     from app.services.scanner.detector import _collect_project_structure as _collect_structure
+    from app.services.scanner.rules.context import ProjectContext
     import re
 
-    structure = _collect_structure(repo_dir)
+    structure = _collect_structure(ProjectContext(repo_dir))
 
     prompt = f"""分析以下项目结构，审核项目类型检测结果。
 

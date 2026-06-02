@@ -230,6 +230,23 @@ def generate_dependency_services(repo_dir: str, app_services: list = None, servi
       - "{port}:{port}"
 """
 
+        # 添加健康检查（数据库类服务）
+        healthcheck_cmd = _get_healthcheck_cmd(service_name)
+        if healthcheck_cmd:
+            compose += f"""    healthcheck:
+      test: {healthcheck_cmd}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+"""
+
+        # 添加启动命令（minio 等需要指定 command）
+        startup_cmd = _get_startup_cmd(service_name)
+        if startup_cmd:
+            compose += f"""    command: {startup_cmd}
+"""
+
         # 添加环境变量 - 自动读取应用配置中的数据库密码和库名
         if service_info.env_vars:
             app_password, app_database = _read_app_db_config(repo_dir, service_name)
@@ -347,7 +364,7 @@ def generate_db_init_service(repo_dir: str, deps: dict, init_commands: list) -> 
     return compose
 
 
-def generate_multi_module_compose(repo_dir: str, services: list, images: dict) -> None:
+def generate_multi_module_compose(repo_dir: str, services: list, images: dict, service_versions: dict = None) -> None:
     """生成多模块项目的 docker-compose.yml"""
     compose = """version: '3.8'
 
@@ -367,31 +384,43 @@ services:
     image: {images[name]}
     ports:
       - "{service['port']}:{service['port']}"
+    restart: unless-stopped
 """
-        # 添加依赖关系
+
+        # 加载外部依赖，构建 depends_on（含 registry/config + 数据库 condition）
+        load_deps = load_deps_from_file(repo_dir) or {}
+        ext_services = load_deps.get("external_services", [])
+        db_services = [s for s in ext_services
+                       if s in EXTERNAL_SERVICES and EXTERNAL_SERVICES[s].category == "database"]
+
         deps = []
         if service["type"] == "service":
-            # 服务依赖 registry 和 config
             for s in services:
                 if s["type"] in ("registry", "config") and s["name"] in images:
-                    deps.append(s["name"])
+                    deps.append(("normal", s["name"]))
         elif service["type"] == "gateway":
-            # 网关依赖 registry
             for s in services:
                 if s["type"] == "registry" and s["name"] in images:
-                    deps.append(s["name"])
+                    deps.append(("normal", s["name"]))
+
+        for db in db_services:
+            deps.append(("db", db))
 
         if deps:
             compose += "    depends_on:\n"
-            for dep in deps:
-                compose += f"      - {dep}\n"
+            for dtype, dname in deps:
+                if dtype == "db":
+                    compose += f"      {dname}:\n"
+                    compose += f"        condition: service_healthy\n"
+                else:
+                    compose += f"      - {dname}\n"
 
         compose += "\n"
 
     # 添加外部依赖服务
     deps = load_deps_from_file(repo_dir)
     if deps.get("external_services"):
-        compose += generate_dependency_services(repo_dir)
+        compose += generate_dependency_services(repo_dir, service_versions=service_versions)
 
     logger.info("_generate_multi_module_compose: images=%s, services=%s, compose_preview=%s",
                 list(images.keys()), [s["name"] for s in services], compose[:300])
@@ -406,36 +435,61 @@ def generate_microservices_compose(repo_dir: str, services: list, images: dict) 
 services:
 """
 
+    ext_deps = load_deps_from_file(repo_dir) or {}
+    ext_services = ext_deps.get("external_services", [])
+    db_services = [s for s in ext_services
+                   if s in EXTERNAL_SERVICES and EXTERNAL_SERVICES[s].category == "database"]
+
     for service in services:
         name = service["name"]
         if name not in images:
             continue
 
         port = service.get("port", 8080)
-        compose += f"""  {name}:
-    image: {images[name]}
-    ports:
-      - "{port}:{port}"
-"""
-        # 推断服务间依赖
-        deps = infer_service_deps(service, services)
-        if deps:
+        svc_type = service.get("type", "service")
+        lang = service.get("language", "")
+
+        compose += "  " + name + ":\n"
+        compose += "    image: " + images[name] + "\n"
+
+        # 仅 gateway / 前端对外暴露端口，内部服务不暴露
+        expose = (svc_type == "gateway" or lang == "node" or name.endswith("-ui") or name.endswith("-web"))
+        if expose:
+            compose += '    ports:\n      - "' + str(port) + ':' + str(port) + '"\n'
+
+        compose += "    restart: unless-stopped\n"
+
+        # depends_on
+        depends = []
+        for db in db_services:
+            depends.append(("db", db))
+        for s in services:
+            if s["name"] == name or s["name"] not in images:
+                continue
+            sn = s["name"].lower()
+            if svc_type == "gateway" and ("registry" in sn or "nacos" in sn):
+                depends.append(("normal", s["name"]))
+            elif svc_type == "service" and ("registry" in sn or "nacos" in sn or "config" in sn):
+                depends.append(("normal", s["name"]))
+
+        if depends:
             compose += "    depends_on:\n"
-            for dep in deps:
-                compose += f"      - {dep}\n"
+            for dtype, dname in depends:
+                if dtype == "db":
+                    compose += "      " + dname + ":\n"
+                    compose += "        condition: service_healthy\n"
+                else:
+                    compose += "      - " + dname + "\n"
 
         compose += "\n"
 
-    # 添加外部依赖服务
-    deps = load_deps_from_file(repo_dir)
-    if deps.get("external_services"):
+    if ext_services:
         compose += generate_dependency_services(repo_dir)
 
     logger.info("generate_microservices_compose: images=%s, services=%s, compose_preview=%s",
                 list(images.keys()), [s["name"] for s in services], compose[:300])
     with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
         f.write(compose)
-
 
 def infer_service_deps(service: dict, all_services: list) -> list:
     """推断服务依赖关系"""
@@ -468,3 +522,63 @@ def load_deps_from_file(repo_dir: str) -> dict:
             return json.load(f)
     except Exception:
         return {}
+
+
+def _get_healthcheck_cmd(service_name: str) -> Optional[str]:
+    """获取数据库/中间件的健康检查命令"""
+    checks = {
+        # 数据库
+        "mysql": ["CMD-SHELL", "mysqladmin ping -uroot -p${MYSQL_ROOT_PASSWORD} --silent"],
+        "mariadb": ["CMD-SHELL", "mysqladmin ping -uroot -p${MYSQL_ROOT_PASSWORD} --silent"],
+        "postgresql": ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-app}"],
+        "postgres": ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"],
+        "mongodb": ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand(\"ping\")' 2>/dev/null || mongo --quiet --eval 'db.adminCommand(\"ping\")'"],
+        "mongo": ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand(\"ping\")' 2>/dev/null || mongo --quiet --eval 'db.adminCommand(\"ping\")'"],
+        "oracle": ["CMD-SHELL", "sqlplus -L SYSTEM/${ORACLE_PWD:-oracle} @localhost:1521/XE 'SELECT 1 FROM DUAL;' 2>&1 | grep -q '1'"],
+        "sqlserver": ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P '${SA_PASSWORD}' -Q 'SELECT 1' -b"],
+        # 缓存
+        "redis": ["CMD", "redis-cli", "ping"],
+        "memcached": ["CMD-SHELL", "echo stats | nc 127.0.0.1 11211 | grep -q uptime"],
+        # 消息队列
+        "kafka": ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"],
+        "rabbitmq": ["CMD-SHELL", "rabbitmq-diagnostics -q ping"],
+        # 搜索引擎
+        "elasticsearch": ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -qE 'status.*(green|yellow)'"],
+        # 注册中心/配置中心
+        "nacos": ["CMD-SHELL", "curl -s http://localhost:8848/nacos/v1/console/health/readiness | grep -q 'true'"],
+        "consul": ["CMD-SHELL", "curl -sf http://localhost:8500/v1/status/leader > /dev/null 2>&1"],
+        "etcd": ["CMD-SHELL", "etcdctl endpoint health 2>&1 | grep -q 'healthy'"],
+        "zookeeper": ["CMD-SHELL", "echo ruok | nc 127.0.0.1 2181 | grep -q imok"],
+        # 对象存储
+        "minio": ["CMD-SHELL", "curl -s http://localhost:9000/minio/health/live | grep -q 'ok'"],
+    }
+    for key, cmd in checks.items():
+        if key in service_name.lower():
+            import json as _json
+            return _json.dumps(cmd)
+    return None
+
+
+
+
+def _get_startup_cmd(service_name: str) -> Optional[str]:
+    """获取需要指定启动命令的服务的 command"""
+    commands = {
+        "minio": ["server", "/data", "--console-address", ":9001"],
+        "redis": None,  # 默认镜像有启动命令
+        "mysql": None,
+        "postgresql": None,
+        "nacos": None,
+        "rabbitmq": None,
+        "kafka": None,
+        "elasticsearch": None,
+        "mongodb": None,
+        "consul": ["agent", "-dev", "-client=0.0.0.0"],
+        "zookeeper": None,
+        "etcd": None,
+    }
+    cmd = commands.get(service_name.lower())
+    if cmd is None:
+        return None
+    import json as _json
+    return _json.dumps(cmd)

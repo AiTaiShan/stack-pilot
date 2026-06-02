@@ -142,15 +142,94 @@ CMD ["java", "-jar", "app.jar"]
 
 
 def _generate_microservices_files(repo_dir: str, project_info: dict):
-    """为微服务项目的每个服务生成 Dockerfile"""
+    """为微服务项目生成 Dockerfile（review阶段生成，build阶段直接使用）"""
+    import os
     services = project_info.get("services", [])
+    java_version = project_info.get("version") or project_info.get("java_version", "17")
+    try:
+        java_version = int(java_version)
+    except (ValueError, TypeError):
+        java_version = 17
+    
     for service in services:
+        if service.get("type") == "common":
+            continue
         service_dir = os.path.join(repo_dir, service["dir"])
-        dockerfile_path = os.path.join(service_dir, "Dockerfile")
-        if not os.path.exists(dockerfile_path):
-            docker_service = None  # 将在调用时传入
-            # 此处需要 docker_service 参数，需要重构
-            pass
+        df_path = os.path.join(service_dir, "Dockerfile")
+        if os.path.exists(df_path):
+            continue
+        
+        lang = service.get("language", "")
+        port = service.get("port", 8080)
+        
+        if lang == "java":
+            os.makedirs(service_dir, exist_ok=True)
+            with open(df_path, "w") as f:
+                f.write(f"""FROM eclipse-temurin:{java_version}-jre-alpine
+WORKDIR /app
+COPY target/*.jar app.jar
+EXPOSE {port}
+CMD ["java", "-jar", "app.jar"]
+""")
+        elif lang == "node":
+            # 从 package.json 读取构建配置
+            pkg_json_path = os.path.join(service_dir, "package.json")
+            build_cmd = "npm run build"
+            output_dir = "dist"
+            start_cmd = None
+            is_frontend = False
+            
+            if os.path.exists(pkg_json_path):
+                with open(pkg_json_path, errors="ignore") as f:
+                    try:
+                        pkg = json.loads(f.read())
+                        scripts = pkg.get("scripts", {})
+                        if "build" in scripts:
+                            build_cmd = "npm run build"
+                        if "dev" in scripts and "build" not in scripts:
+                            is_frontend = True
+                        # 检测前端框架
+                        if os.path.exists(os.path.join(service_dir, "vite.config.ts")) or os.path.exists(os.path.join(service_dir, "vite.config.js")):
+                            is_frontend = True
+                        if os.path.exists(os.path.join(service_dir, "vue.config.js")):
+                            is_frontend = True
+                        if os.path.exists(os.path.join(service_dir, "next.config.js")) or os.path.exists(os.path.join(service_dir, "next.config.ts")):
+                            is_frontend = True
+                        # 读取 start 命令
+                        if "start" in scripts:
+                            start_cmd = scripts["start"]
+                    except json.JSONDecodeError:
+                        pass
+            
+            os.makedirs(service_dir, exist_ok=True)
+            if is_frontend:
+                # 前端项目：构建后用 nginx 服务
+                with open(df_path, "w") as f:
+                    f.write(f"""FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --registry https://registry.npmmirror.com
+COPY . .
+RUN {build_cmd}
+
+FROM nginx:alpine
+COPY --from=builder /app/{output_dir} /usr/share/nginx/html
+EXPOSE {port}
+CMD ["nginx", "-g", "daemon off;"]
+""")
+            else:
+                # 后端 Node 项目
+                cmd = start_cmd or f"node {os.path.join(service_dir, 'dist', 'main.js')}"
+                with open(df_path, "w") as f:
+                    f.write(f"""FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --registry https://registry.npmmirror.com
+COPY . .
+RUN {build_cmd}
+EXPOSE {port}
+CMD ["sh", "-c", "{cmd}"]
+""")
 
 
 def _generate_monorepo_files(repo_dir: str, project_info: dict):

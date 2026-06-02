@@ -181,7 +181,11 @@ def _build_multi_module_java(db: Session, deployment_id: str, deployment: Deploy
         log_fn(db, deployment_id, "info", f"{service_name} is executable, building image...")
 
         # 生成 Dockerfile
-        java_version = project_info.get("java_version", 17)
+        java_version = project_info.get("version") or project_info.get("java_version", 17)
+        try:
+            java_version = int(java_version)
+        except (ValueError, TypeError):
+            java_version = 17
         dockerfile_content = f"""FROM eclipse-temurin:{java_version}-jre-alpine
 WORKDIR /app
 COPY target/{jar_file} app.jar
@@ -236,18 +240,54 @@ def _build_microservices(db: Session, deployment_id: str, deployment: Deployment
     services = project_info.get("services", [])
     images = {}
 
+    # 检测是否有 Java 微服务，需要先 Maven 构建
+    has_java = any(s.get("language") == "java" and s.get("type") != "common" for s in services)
+    if has_java:
+        log_fn(db, deployment_id, "info", "Building Java microservices with Maven...")
+        result = subprocess.run(
+            ["mvn", "clean", "package", "-DskipTests"],
+            cwd=repo_dir, capture_output=True, text=True, timeout=600
+        )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["./mvnw", "clean", "package", "-DskipTests"],
+                cwd=repo_dir, capture_output=True, text=True, timeout=600
+            )
+        if result.returncode != 0:
+            raise AppError(
+                code=ErrorCode.BUILD_ERROR,
+                message=f"Maven build failed: {result.stderr[-300:]}",
+                severity=ErrorSeverity.HIGH,
+            )
+        log_fn(db, deployment_id, "info", "Maven build completed")
+
     for service in services:
+        if service.get("type") == "common":
+            continue
         service_name = service["name"]
         service_dir = os.path.join(repo_dir, service["dir"])
 
         log_fn(db, deployment_id, "info", f"Building service: {service_name}")
+        log_fn(db, deployment_id, "info", f"Building service: {service_name}")
 
-        # 生成 Dockerfile（如果不存在）
+        # Dockerfile 已在 review_step 生成，此处直接构建
         dockerfile_path = os.path.join(service_dir, "Dockerfile")
         if not os.path.exists(dockerfile_path):
-            docker_service.generate_dockerfile(service, service_dir)
-
-        # 构建镜像
+            log_fn(db, deployment_id, "warning", f"Dockerfile not found for {service_name}, generating fallback...")
+            if service.get("language") == "java":
+                java_ver = project_info.get("version") or project_info.get("java_version", "17")
+                try: java_ver = int(java_ver)
+                except: java_ver = 17
+                with open(dockerfile_path, "w") as df:
+                    df.write(f"""FROM eclipse-temurin:{java_ver}-jre-alpine
+WORKDIR /app
+COPY target/*.jar app.jar
+EXPOSE {service.get("port", 8080)}
+CMD ["java", "-jar", "app.jar"]
+""")
+            else:
+                log_fn(db, deployment_id, "warning", f"No Dockerfile for {service_name}, skipping")
+                continue
         image_tag = f"stackpilot/{repo_name}-{service_name}:{commit_short}"
         try:
             docker_service.build_image(service_dir, image_tag)

@@ -4,6 +4,7 @@
 通过 ProjectContext 统一文件 IO，避免重复读取。
 """
 import os
+from typing import Optional
 from .models import ScanResult, ServiceInfo, FrontendInfo, BackendInfo
 from .rules.context import ProjectContext
 from .rules.base_rule import BaseRule
@@ -89,7 +90,31 @@ def detect(repo_dir: str) -> ScanResult:
 
     # ── 结构检测（优先级从高到低） ────────────────────────────────
 
-    # 多模块 Java
+    # 检测是否为 Spring Cloud 项目（每个模块独立部署，走微服务检测）
+    spring_cloud = _detect_spring_cloud(ctx)
+    if spring_cloud:
+        ms = detect_microservices(ctx)
+        if ms:
+            services = []
+            langs = set()
+            for s in ms.get("services", []):
+                services.append(ServiceInfo(**s))
+                if s.get("language"):
+                    langs.add(s["language"])
+            # 同时检测前端（如 ruoyi-ui）
+            frontend_fe = _detect_micro_frontend(ctx)
+            result = ScanResult(
+                project_type="microservices", languages=list(langs),
+                language=list(langs)[0] if langs else "java",
+                services=services, key_files={}, dependencies={},
+                frontend=frontend_fe,
+            )
+            result.key_files["structure"] = _collect_project_structure(ctx)
+            result.key_files["existing_dockerfile"] = _collect_existing_dockerfile(ctx)
+            result.warnings = ctx.warnings
+            return result
+
+    # 多模块 Java（非 Spring Cloud，如单体若依）
     mm = detect_multi_module_java(ctx)
     if mm:
         result = ScanResult(
@@ -104,7 +129,7 @@ def detect(repo_dir: str) -> ScanResult:
         result.warnings = ctx.warnings
         return result
 
-    # 微服务
+    # 微服务（非 Spring Cloud 项目）
     ms = detect_microservices(ctx)
     if ms:
         services = []
@@ -203,3 +228,42 @@ def _detect_single(ctx: ProjectContext, files: list, sub_dir: str = "") -> ScanR
             key_files={}, dependencies={},
         )
     return None
+
+
+def _detect_spring_cloud(ctx: ProjectContext) -> bool:
+    """检测是否为 Spring Cloud 项目"""
+    import re
+    pom = ctx.read_text("pom.xml")
+    if not pom:
+        return False
+    return bool(re.search(r'<spring-cloud', pom, re.IGNORECASE))
+
+
+def _detect_micro_frontend(ctx: ProjectContext) -> Optional[FrontendInfo]:
+    """检测微服务项目中的前端模块（如 ruoyi-ui）"""
+    import os
+    frontend_candidates = []
+    skip = {'.git', 'node_modules', 'target', '.mvn', '__pycache__'}
+    for d in os.listdir(ctx.dir_path):
+        if d.startswith('.') or d in skip:
+            continue
+        full = os.path.join(ctx.dir_path, d)
+        if not os.path.isdir(full):
+            continue
+        files = [f for f in os.listdir(full) if os.path.isfile(os.path.join(full, f))]
+        if 'package.json' in files:
+            frontend_candidates.append(d)
+    if not frontend_candidates:
+        return None
+    fe_dir = frontend_candidates[0]
+    fe_full = os.path.join(ctx.dir_path, fe_dir)
+    fe_files = os.listdir(fe_full) if os.path.isdir(fe_full) else []
+    framework = ""
+    if "vite.config.ts" in fe_files or "vite.config.js" in fe_files:
+        framework = "vue"
+    elif "next.config.js" in fe_files or "next.config.ts" in fe_files:
+        framework = "next"
+    elif "nuxt.config.ts" in fe_files or "nuxt.config.js" in fe_files:
+        framework = "nuxt"
+    return FrontendInfo(dir=fe_dir, language="node", framework=framework, port=80,
+                        build_cmd="npm run build", start_cmd=f"cd {fe_dir} && npm run dev")

@@ -110,7 +110,7 @@ cp ../.env.example ../.env  # 首次需要
 .venv/bin/alembic upgrade head
 
 # 启动
-.venv/bin/uvicorn app.main:app --reload --port 9000
+.venv/bin/uvicorn app.main:app --reload --port 9099
 ```
 
 #### 3. 前端（请使用 pnpm）

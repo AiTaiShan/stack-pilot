@@ -48,14 +48,12 @@ class DockerService:
         build_start = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
 
         try:
-            build_env = {**os.environ, "DOCKER_BUILDKIT": "0"}
             result = subprocess.run(
                 cmd,
                 cwd=path,
                 capture_output=True,
                 text=True,
                 timeout=600,
-                env=build_env,
             )
             build_end = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
             duration_ms = int((build_end - build_start).total_seconds() * 1000)

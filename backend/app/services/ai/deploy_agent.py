@@ -60,7 +60,7 @@ FRAMEWORK_DIMENSIONS = {
 # ========== 节点 ==========
 
 def reviewer_node(state: DeploymentReviewState) -> Dict:
-    """审核者: 检查 Dockerfile 并直接修复"""
+    """审核者: 扫描所有 Dockerfile 并直接修复（支持多模块/微服务/单体）"""
     import os
     import re
 
@@ -69,11 +69,10 @@ def reviewer_node(state: DeploymentReviewState) -> Dict:
     framework = project_info.get("framework", "")
     language = project_info.get("language", "")
     version = project_info.get("version", "")
+    project_type = project_info.get("project_type", "") or project_info.get("type", "single")
     port = project_info.get("port", 8080)
     issues = []
     fixed_files = []
-
-    dockerfile_path = os.path.join(repo_dir, "Dockerfile")
 
     # 从 go.mod 读取版本（如果 project_info 中没有）
     if language == "go" and not version:
@@ -86,54 +85,59 @@ def reviewer_node(state: DeploymentReviewState) -> Dict:
                         project_info["version"] = version
                         break
 
-    # 如果 Dockerfile 不存在，无法审核
-    if not os.path.exists(dockerfile_path):
+    # ── 找到所有 Dockerfile（递归扫描） ──────────────────────────────
+    dockerfiles = []
+    skip_dirs = {'.git', 'node_modules', 'target', '.mvn', '__pycache__',
+                 '.stackpilot', 'dist', 'build', '.idea', '.vscode'}
+    for root, dirs, files in os.walk(repo_dir):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        if 'Dockerfile' in files:
+            dockerfiles.append(os.path.join(root, 'Dockerfile'))
+
+    if not dockerfiles:
+        issue_msg = "Dockerfile 不存在"
+        if project_type in ("multi-module-java", "multi-module-java-with-frontend"):
+            issue_msg = "多模块 Java 项目缺少 Dockerfile（应在 build 步骤生成）"
         issues.append(ReviewIssue(
             category="missing_file", severity="high",
-            description="Dockerfile 不存在",
+            description=issue_msg,
             file_path="Dockerfile", fix_suggestion="生成 Dockerfile"
         ))
         return {"issues": issues, "fixed_files": fixed_files, "round": state["round"] + 1}
 
-    with open(dockerfile_path, errors="ignore") as f:
-        df_content = f.read()
+    # ── 逐个审核 Dockerfile ──────────────────────────────────────────
+    for dockerfile_path in dockerfiles:
+        rel_path = os.path.relpath(dockerfile_path, repo_dir)
+        with open(dockerfile_path, errors="ignore") as f:
+            df_content = f.read()
 
-    # --- 检查 1: Wails 前端构建 ---
-    if framework == "wails":
-        has_frontend_build = "npm" in df_content and "build" in df_content
-        if not has_frontend_build:
-            frontend_dir = os.path.join(repo_dir, "frontend")
-            if os.path.isdir(frontend_dir):
-                issues.append(ReviewIssue(
-                    category="frontend_build", severity="high",
-                    description="Wails 项目缺少前端构建步骤",
-                    file_path="Dockerfile",
-                    fix_suggestion="添加 Node.js 多阶段构建"
-                ))
-                # 直接修复：重写 Dockerfile（根据 lock 文件选择包管理器）
-                go_version = version or "1.24"
-                frontend_dir = os.path.join(repo_dir, "frontend")
+        # --- 检查 1: Wails 前端构建 ---
+        if framework == "wails":
+            has_frontend_build = "npm" in df_content and "build" in df_content
+            if not has_frontend_build:
+                fe_dir = os.path.join(repo_dir, "frontend")
+                if os.path.isdir(fe_dir):
+                    issues.append(ReviewIssue(
+                        category="frontend_build", severity="high",
+                        description=f"Wails 项目缺少前端构建步骤 ({rel_path})",
+                        file_path=rel_path,
+                        fix_suggestion="添加 Node.js 多阶段构建"
+                    ))
+                    go_version = version or "1.24"
+                    if os.path.exists(os.path.join(fe_dir, "pnpm-lock.yaml")):
+                        install_cmd = "RUN corepack enable && corepack prepare pnpm@latest --activate\nRUN pnpm install --registry https://registry.npmmirror.com"
+                        build_cmd = "RUN pnpm build"
+                        copy_lock = "COPY frontend/package.json frontend/pnpm-lock.yaml* frontend/pnpm-workspace.yaml* ./"
+                    elif os.path.exists(os.path.join(fe_dir, "yarn.lock")):
+                        install_cmd = "RUN yarn install --registry https://registry.npmmirror.com"
+                        build_cmd = "RUN yarn build"
+                        copy_lock = "COPY frontend/package.json frontend/yarn.lock* ./"
+                    else:
+                        install_cmd = "RUN npm install --registry https://registry.npmmirror.com --legacy-peer-deps"
+                        build_cmd = "RUN npm run build"
+                        copy_lock = "COPY frontend/package.json frontend/package-lock.json* ./"
 
-                # 检测前端包管理器
-                if os.path.exists(os.path.join(frontend_dir, "pnpm-lock.yaml")):
-                    pkg_mgr = "pnpm"
-                    install_cmd = "RUN corepack enable && corepack prepare pnpm@latest --activate\nRUN pnpm install --registry https://registry.npmmirror.com"
-                    build_cmd = "RUN pnpm build"
-                    copy_lock = "COPY frontend/package.json frontend/pnpm-lock.yaml* frontend/pnpm-workspace.yaml* ./"
-                elif os.path.exists(os.path.join(frontend_dir, "yarn.lock")):
-                    pkg_mgr = "yarn"
-                    install_cmd = "RUN yarn install --registry https://registry.npmmirror.com"
-                    build_cmd = "RUN yarn build"
-                    copy_lock = "COPY frontend/package.json frontend/yarn.lock* ./"
-                else:
-                    pkg_mgr = "npm"
-                    install_cmd = "RUN npm install --registry https://registry.npmmirror.com --legacy-peer-deps"
-                    build_cmd = "RUN npm run build"
-                    copy_lock = "COPY frontend/package.json frontend/package-lock.json* ./"
-
-                logger.info("Wails frontend package manager detected: %s", pkg_mgr)
-
-                new_dockerfile = f"""FROM node:lts-alpine AS frontend-builder
+                    new_df = f"""FROM node:lts-alpine AS frontend-builder
 WORKDIR /app/frontend
 {copy_lock}
 {install_cmd}
@@ -156,53 +160,89 @@ COPY --from=builder /app/main .
 EXPOSE {port}
 CMD ["./main"]
 """
-                with open(dockerfile_path, "w") as f:
-                    f.write(new_dockerfile)
-                fixed_files.append("Dockerfile")
-                df_content = new_dockerfile
-                logger.info("Wails Dockerfile rewritten with frontend build stage")
+                    with open(dockerfile_path, "w") as f:
+                        f.write(new_df)
+                    fixed_files.append(rel_path)
+                    df_content = new_df
+                    logger.info("Wails Dockerfile rewritten: %s", rel_path)
 
-    # --- 检查 2: go:embed 前端资源 ---
-    if language == "go" and framework != "wails":
-        main_go = os.path.join(repo_dir, "main.go")
-        if os.path.exists(main_go):
-            with open(main_go, errors="ignore") as f:
-                main_content = f.read()
-            if "//go:embed" in main_content and "frontend" in main_content.lower():
-                has_frontend_step = "npm" in df_content or "frontend/dist" in df_content
-                if not has_frontend_step:
-                    issues.append(ReviewIssue(
-                        category="embed_check", severity="high",
-                        description="main.go 使用 //go:embed 嵌入前端资源",
-                        file_path="Dockerfile", fix_suggestion="添加前端构建阶段"
-                    ))
+        # --- 检查 2: go:embed 前端资源 ---
+        if language == "go" and framework != "wails":
+            main_go = os.path.join(repo_dir, "main.go")
+            if os.path.exists(main_go):
+                with open(main_go, errors="ignore") as f:
+                    main_content = f.read()
+                if "//go:embed" in main_content and "frontend" in main_content.lower():
+                    has_step = "npm" in df_content or "frontend/dist" in df_content
+                    if not has_step:
+                        issues.append(ReviewIssue(
+                            category="embed_check", severity="high",
+                            description=f"go:embed 前端资源但 Dockerfile 缺少构建步骤 ({rel_path})",
+                            file_path=rel_path, fix_suggestion="添加前端构建阶段"
+                        ))
 
-    # --- 检查 3: GOPROXY ---
-    if language == "go" and "GOPROXY" not in df_content:
-        issues.append(ReviewIssue(
-            category="config_adapt", severity="medium",
-            description="Go 项目未设置 GOPROXY",
-            file_path="Dockerfile", fix_suggestion="添加 ENV GOPROXY"
-        ))
-        if "go mod download" in df_content:
-            df_content = df_content.replace(
-                "RUN go mod download",
-                "ENV GOPROXY=https://goproxy.cn,direct\nRUN go mod download"
-            )
-            with open(dockerfile_path, "w") as f:
-                f.write(df_content)
-            fixed_files.append("Dockerfile")
-
-    # --- 检查 4: 版本匹配 ---
-    expected_version = version
-    from_matches = re.findall(r"FROM\s+(\S+):(\S+)", df_content)
-    for image, tag in from_matches:
-        if expected_version and expected_version not in tag and "alpine" not in tag and "lts" not in tag:
+        # --- 检查 3: GOPROXY ---
+        if language == "go" and "GOPROXY" not in df_content:
             issues.append(ReviewIssue(
-                category="version_mismatch", severity="high",
-                description=f"基础镜像版本 {tag} 与项目版本 {expected_version} 不匹配",
-                file_path="Dockerfile", fix_suggestion=f"改为 {expected_version}"
+                category="config_adapt", severity="medium",
+                description=f"Go 项目未设置 GOPROXY ({rel_path})",
+                file_path=rel_path, fix_suggestion="添加 ENV GOPROXY"
             ))
+            if "go mod download" in df_content:
+                df_content = df_content.replace(
+                    "RUN go mod download",
+                    "ENV GOPROXY=https://goproxy.cn,direct\nRUN go mod download"
+                )
+                with open(dockerfile_path, "w") as f:
+                    f.write(df_content)
+                fixed_files.append(rel_path)
+
+        # --- 检查 4a: Node.js 前端 Dockerfile 检查 ---
+        if language == "node":
+            has_vite = os.path.exists(os.path.join(repo_dir, rel_path.replace("/Dockerfile", ""), "vite.config.ts"))
+            has_vue = os.path.exists(os.path.join(repo_dir, rel_path.replace("/Dockerfile", ""), "vue.config.js"))
+            has_next = os.path.exists(os.path.join(repo_dir, rel_path.replace("/Dockerfile", ""), "next.config.js"))
+            if (has_vite or has_vue or has_next) and "nginx" not in df_content and "RUN npm run build" in df_content:
+                issues.append(ReviewIssue(
+                    category="frontend_build", severity="high",
+                    description=f"{rel_path}: 前端项目应使用 nginx 服务静态文件",
+                    file_path=rel_path,
+                    fix_suggestion="改为多阶段构建：node build → nginx serve"
+                ))
+                
+                # 直接修复
+                port_match = re.search(r'EXPOSE (\d+)', df_content)
+                port = port_match.group(1) if port_match else "80"
+                new_df = f"""FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+EXPOSE {port}
+CMD ["nginx", "-g", "daemon off;"]
+"""
+                with open(dockerfile_path, "w") as f:
+                    f.write(new_df)
+                fixed_files.append(rel_path)
+                df_content = new_df
+                logger.info("Node.js frontend Dockerfile rewritten: %s", rel_path)
+
+        # --- 检查 4b: 版本匹配（修正逻辑） ---
+        expected_ver = version
+        from_matches = re.findall(r"FROM\s+(\S+):(\S+)", df_content)
+        for image, tag in from_matches:
+            is_version_tag = bool(re.match(r'^\d+', tag))
+            if expected_ver and is_version_tag and expected_ver not in tag:
+                issues.append(ReviewIssue(
+                    category="version_mismatch", severity="high",
+                    description=f"{rel_path}: 基础镜像版本 '{tag}' 与项目版本 '{expected_ver}' 不匹配",
+                    file_path=rel_path,
+                    fix_suggestion=f"将镜像版本改为 {expected_ver}"
+                ))
 
     return {
         "issues": issues,
