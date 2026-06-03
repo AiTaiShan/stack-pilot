@@ -461,6 +461,34 @@ def _build_frontend_for_composite(db: Session, deployment_id: str, deployment: D
                     gateway_name = svc["name"]
                     break
 
+        # 从项目配置中读取 API 前缀和 gateway 端口
+        api_prefix = "/prod-api"  # 默认值
+        gateway_port = 8080       # 默认值
+        # 从 .env.production 读取 API 前缀
+        env_prod_path = os.path.join(frontend_dir, ".env.production")
+        if os.path.exists(env_prod_path):
+            with open(env_prod_path) as _env_f:
+                for _line in _env_f:
+                    _line = _line.strip()
+                    if _line.startswith("VUE_APP_BASE_API"):
+                        _parts = _line.split("=")
+                        if len(_parts) >= 2:
+                            _val = _parts[1].strip().strip("'\"")
+                            if _val:
+                                api_prefix = _val
+                                log_fn(db, deployment_id, "info", f"Detected API prefix from .env.production: {api_prefix}")
+                                break
+        # 从 vue.config.js 或 application.yml 读取 gateway 端口
+        vue_config_path = os.path.join(frontend_dir, "vue.config.js")
+        if os.path.exists(vue_config_path):
+            with open(vue_config_path) as _vc_f:
+                _vc_content = _vc_f.read()
+            import re as _re
+            _m = _re.search(r'target[\s:]*["\'`]http://[^:]+:(\d+)', _vc_content)
+            if _m:
+                gateway_port = int(_m.group(1))
+                log_fn(db, deployment_id, "info", f"Detected gateway port from vue.config.js: {gateway_port}")
+
         # 写入 nginx.conf 包含反向代理配置
         nginx_conf_path = os.path.join(frontend_dir, "nginx.conf")
         with open(nginx_conf_path, "w") as f:
@@ -486,12 +514,12 @@ http {{
             index  index.html index.htm;
         }}
 
-        location /prod-api/ {{
+        location {api_prefix}/ {{
             proxy_set_header Host $http_host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header REMOTE-HOST $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_pass http://{gateway_name}:8080/;
+            proxy_pass http://{gateway_name}:{gateway_port}/;
         }}
 
         error_page   500 502 503 504  /50x.html;
@@ -501,7 +529,7 @@ http {{
     }}
 }}
 """)
-        log_fn(db, deployment_id, "info", f"Generated nginx.conf with proxy to {gateway_name}:8080")
+        log_fn(db, deployment_id, "info", f"Generated nginx.conf with proxy: {api_prefix}/ -> http://{gateway_name}:{gateway_port}/")
 
     docker_service.generate_dockerfile(frontend_info, frontend_dir)
 
