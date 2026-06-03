@@ -379,6 +379,10 @@ services:
         name = service["name"]
         if name not in images:
             continue
+        # 防御性检查：跳过 common/library 类型，这些不应该作为独立容器运行
+        if service.get("type") in ("common", "library"):
+            logger.info("Skipping common/library service: %s (type=%s)", name, service.get("type"))
+            continue
 
         compose += f"""  {name}:
     image: {images[name]}
@@ -428,7 +432,8 @@ services:
         f.write(compose)
 
 
-def generate_microservices_compose(repo_dir: str, services: list, images: dict) -> None:
+def generate_microservices_compose(repo_dir: str, services: list, images: dict,
+                                   frontend_image: str = None, frontend_info: dict = None) -> None:
     """生成微服务项目的 docker-compose.yml"""
     compose = """version: '3.8'
 
@@ -440,9 +445,66 @@ services:
     db_services = [s for s in ext_services
                    if s in EXTERNAL_SERVICES and EXTERNAL_SERVICES[s].category == "database"]
 
+    # 如果有前端镜像，先添加前端服务
+    if frontend_image and frontend_info:
+        frontend_port = frontend_info.get("port", 3000)
+        frontend_name = frontend_info.get("name", "frontend")
+
+        # 动态查找 gateway 服务名
+        gateway_name = "gateway"
+        for svc in services:
+            if svc.get("type") == "gateway":
+                gateway_name = svc["name"]
+                break
+
+        compose += f"""  {frontend_name}:
+    image: {frontend_image}
+    ports:
+      - "{frontend_port}:{frontend_port}"
+    restart: unless-stopped
+    depends_on:
+      - {gateway_name}
+
+"""
+
+    # 收集前端服务的目录名，用于后续跳过
+    frontend_dir_names = set()
+    if frontend_info:
+        frontend_dir_names.add(frontend_info.get("dir", ""))
+
+    # 如果有前端镜像，先添加前端服务
+    if frontend_image and frontend_info:
+        frontend_port = frontend_info.get("port", 3000)
+        frontend_name = frontend_info.get("name", "frontend")
+
+        # 动态查找 gateway 服务名
+        gateway_name = "gateway"
+        for svc in services:
+            if svc.get("type") == "gateway":
+                gateway_name = svc["name"]
+                break
+
+        compose += f"""  {frontend_name}:
+    image: {frontend_image}
+    ports:
+      - "{frontend_port}:{frontend_port}"
+    restart: unless-stopped
+    depends_on:
+      - {gateway_name}
+
+"""
+
     for service in services:
         name = service["name"]
         if name not in images:
+            continue
+        # 防御性检查：跳过 common/library 类型，这些不应该作为独立容器运行
+        if service.get("type") in ("common", "library"):
+            logger.info("Skipping common/library service: %s (type=%s)", name, service.get("type"))
+            continue
+        # 如果已经有 frontend_image，跳过 services 列表中的前端服务（语言为 node 的服务）
+        if frontend_image and service.get("language") == "node":
+            logger.info("Skipping frontend service from services list (already added via frontend_image): %s", name)
             continue
 
         port = service.get("port", 8080)
@@ -486,8 +548,8 @@ services:
     if ext_services:
         compose += generate_dependency_services(repo_dir)
 
-    logger.info("generate_microservices_compose: images=%s, services=%s, compose_preview=%s",
-                list(images.keys()), [s["name"] for s in services], compose[:300])
+    logger.info("generate_microservices_compose: images=%s, services=%s, frontend=%s, compose_preview=%s",
+                list(images.keys()), [s["name"] for s in services], frontend_image, compose[:300])
     with open(os.path.join(repo_dir, "docker-compose.yml"), "w") as f:
         f.write(compose)
 

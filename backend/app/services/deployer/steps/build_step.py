@@ -31,6 +31,30 @@ def execute(db: Session, deployment_id: str, deployment: Deployment,
     """
     # 优先使用 Python 属性（不会被 db.commit() expire），再回退到 config
     project_type = getattr(deployment, '_project_type', '') or (deployment.config or {}).get("type", "")
+
+    # 检测是否有前端目录，如果有则升级项目类型
+    repo_dir_temp = getattr(deployment, '_repo_dir', '') or (deployment.config or {}).get('_repo_dir', '') or os.path.join(
+        git_service.temp_dir,
+        deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
+    )
+    if repo_dir_temp and os.path.exists(repo_dir_temp) and "with-frontend" not in project_type:
+        from app.services.scanner.rules.structure_rule import _find_frontend_directory
+        from app.services.scanner.rules.context import ProjectContext
+        ctx = ProjectContext(repo_dir_temp)
+        fe_dir = _find_frontend_directory(ctx)
+        if fe_dir:
+            if project_type == "microservices":
+                project_type = "microservices-with-frontend"
+            elif project_type == "multi-module-java":
+                project_type = "multi-module-java-with-frontend"
+            # 更新 deployment.config 中的 type
+            config = deployment.config or {}
+            config["type"] = project_type
+            deployment.config = config
+            db.commit()
+            log_fn(db, deployment_id, "info",
+                   f"Upgraded project type to {project_type} (detected frontend: {fe_dir})")
+
     repo_dir = getattr(deployment, '_repo_dir', '') or os.path.join(
         git_service.temp_dir,
         deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
@@ -47,9 +71,13 @@ def execute(db: Session, deployment_id: str, deployment: Deployment,
         if "with-frontend" in project_type:
             _build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short, docker_service, log_fn)
     elif project_type in ("microservices", "microservices-with-frontend"):
-        _build_microservices(db, deployment_id, deployment, repo_dir, repo_name, commit_short, docker_service, log_fn)
+        # 先构建前端镜像（如果有）
+        frontend_image = None
+        frontend_info = None
         if "with-frontend" in project_type:
-            _build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short, docker_service, log_fn)
+            frontend_image, frontend_info = _build_frontend_for_composite(db, deployment_id, deployment, repo_dir, repo_name, commit_short, docker_service, log_fn)
+        # 构建微服务镜像并生成包含前端的 compose
+        _build_microservices(db, deployment_id, deployment, repo_dir, repo_name, commit_short, docker_service, log_fn, frontend_image, frontend_info)
     elif project_type == "monorepo":
         _build_monorepo(db, deployment_id, deployment, repo_dir, repo_name, commit_short, docker_service, log_fn)
     else:
@@ -61,7 +89,7 @@ def execute(db: Session, deployment_id: str, deployment: Deployment,
 
 
 def _cleanup_old_images(db: Session, deployment_id: str, repo_name: str, log_fn):
-    """清理旧的 Docker 镜像，防止磁盘空间膨胀"""
+    """清理旧的 Docker 镜像，防止磁盘空间膨胀，并确保不会使用缓存"""
     image_prefix = f"stackpilot/{repo_name}"
 
     try:
@@ -76,19 +104,17 @@ def _cleanup_old_images(db: Session, deployment_id: str, repo_name: str, log_fn)
 
         images = [img.strip() for img in result.stdout.strip().split('\n') if img.strip()]
 
-        # 保留最近 N 个镜像，支持回滚
-        KEEP_IMAGES = 3
-        if len(images) <= KEEP_IMAGES:
+        if not images:
+            log_fn(db, deployment_id, "info", "No existing images found, proceeding with fresh build")
             return
 
-        images_to_remove = images[KEEP_IMAGES:]
-
-        for img in images_to_remove:
-            log_fn(db, deployment_id, "info", f"Cleaning up old image: {img}")
+        # 删除所有相关镜像，确保不会使用缓存
+        log_fn(db, deployment_id, "info", f"Removing {len(images)} existing images to ensure fresh build...")
+        for img in images:
+            log_fn(db, deployment_id, "info", f"Removing image: {img}")
             subprocess.run(["docker", "rmi", "-f", img], capture_output=True, timeout=30)
 
-        if images_to_remove:
-            log_fn(db, deployment_id, "info", f"Cleaned up {len(images_to_remove)} old images")
+        log_fn(db, deployment_id, "info", f"Removed {len(images)} images successfully")
 
     except Exception as e:
         log_fn(db, deployment_id, "warning", f"Image cleanup failed: {e}")
@@ -237,7 +263,7 @@ CMD ["java", "-jar", "app.jar"]
 
 def _build_microservices(db: Session, deployment_id: str, deployment: Deployment,
                           repo_dir: str, repo_name: str, commit_short: str,
-                          docker_service, log_fn):
+                          docker_service, log_fn, frontend_image=None, frontend_info=None):
     """构建通用微服务项目（任何语言）"""
     project_info = getattr(deployment, '_project_info', deployment.config or {})
     services = project_info.get("services", [])
@@ -299,8 +325,8 @@ CMD ["java", "-jar", "app.jar"]
         except Exception as e:
             log_fn(db, deployment_id, "warning", f"Failed to build {service_name}: {e}")
 
-    # 生成 docker-compose.yml
-    generate_microservices_compose(repo_dir, services, images)
+    # 生成 docker-compose.yml（包含前端服务）
+    generate_microservices_compose(repo_dir, services, images, frontend_image, frontend_info)
 
     deployment.image_tag = list(images.values())[0] if images else None
     deployment.config = {**project_info, "images": images, "compose": True}
@@ -327,7 +353,7 @@ def _build_monorepo(db: Session, deployment_id: str, deployment: Deployment,
 
     # 构建前端
     if frontend:
-        frontend_dir = os.path.join(repo_dir, frontend.get("dir", "frontend"))
+        frontend_dir = os.path.join(repo_dir, frontend.get("dir", ""))
         frontend_image = f"stackpilot/{repo_name}-frontend:{commit_short}"
         docker_service.generate_dockerfile(frontend, frontend_dir)
         docker_service.build_image(frontend_dir, frontend_image)
@@ -382,12 +408,12 @@ def _build_frontend_for_composite(db: Session, deployment_id: str, deployment: D
     """为组合项目（multi-module-java-with-frontend / microservices-with-frontend）构建前端镜像"""
     project_info = getattr(deployment, '_project_info', deployment.config or {})
     frontend_info = project_info.get("frontend", {})
-    frontend_dir_name = frontend_info.get("dir", "frontend")
+    frontend_dir_name = frontend_info.get("dir", "")
     frontend_dir = os.path.join(repo_dir, frontend_dir_name)
 
     if not os.path.isdir(frontend_dir):
         log_fn(db, deployment_id, "warning", f"Frontend dir '{frontend_dir_name}' not found, skipping")
-        return
+        return None, None
 
     log_fn(db, deployment_id, "info", f"Building frontend from {frontend_dir_name}/")
 
@@ -404,8 +430,8 @@ def _build_frontend_for_composite(db: Session, deployment_id: str, deployment: D
 
     log_fn(db, deployment_id, "info", f"Frontend image built: {frontend_image}")
 
-    # 为组合项目生成包含前端的 docker-compose
-    _generate_composite_compose(repo_dir, repo_name, project_info, frontend_image)
+    # 返回前端镜像信息，供 generate_microservices_compose 使用
+    return frontend_image, frontend_info
 
 
 def _generate_composite_compose(repo_dir: str, repo_name: str,
