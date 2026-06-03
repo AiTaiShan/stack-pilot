@@ -384,12 +384,22 @@ services:
             logger.info("Skipping common/library service: %s (type=%s)", name, service.get("type"))
             continue
 
+        # 仅 gateway / 前端对外暴露端口，内部服务不暴露
+        svc_type = service.get("type", "service")
+        lang = service.get("language", "")
+        # 按 type 或名称中包含 gateway/registry 匹配
+        expose = (svc_type in ("gateway", "registry")
+                  or "gateway" in name.lower()
+                  or "registry" in name.lower()
+                  or lang == "node"
+                  or name.endswith("-ui") or name.endswith("-web"))
+
         compose += f"""  {name}:
     image: {images[name]}
-    ports:
-      - "{service['port']}:{service['port']}"
-    restart: unless-stopped
 """
+        if expose:
+            compose += f'    ports:\n      - "{service["port"]}:{service["port"]}"\n'
+        compose += "    restart: unless-stopped\n"
 
         # 加载外部依赖，构建 depends_on（含 registry/config + 数据库 condition）
         load_deps = load_deps_from_file(repo_dir) or {}
@@ -495,7 +505,11 @@ services:
         compose += "    image: " + images[name] + "\n"
 
         # 仅 gateway / 前端对外暴露端口，内部服务不暴露
-        expose = (svc_type == "gateway" or lang == "node" or name.endswith("-ui") or name.endswith("-web"))
+        expose = (svc_type in ("gateway", "registry")
+                  or "gateway" in name.lower()
+                  or "registry" in name.lower()
+                  or lang == "node"
+                  or name.endswith("-ui") or name.endswith("-web"))
         if expose:
             compose += '    ports:\n      - "' + str(port) + ':' + str(port) + '"\n'
 
