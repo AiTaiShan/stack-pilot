@@ -400,6 +400,20 @@ services:
         if expose:
             compose += f'    ports:\n      - "{service["port"]}:{service["port"]}"\n'
         compose += "    restart: unless-stopped\n"
+        # Java 服务添加环境变量，覆盖 localhost -> Docker 服务名
+        if lang == "java":
+            env_vars = []
+            if "redis" in ext_services:
+                env_vars.append("SPRING_REDIS_HOST=redis")
+            if "mysql" in ext_services:
+                # 从 dependencies.json 读取数据库名
+                db_name = ext_deps.get("service_details", {}).get("mysql", {}).get("env_vars", {}).get("MYSQL_DATABASE", "app")
+                env_vars.append(f"SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/{db_name}?useSSL=false&serverTimezone=Asia%2F8&characterEncoding=utf8&allowPublicKeyRetrieval=true")
+            if env_vars:
+                compose += "    environment:\n"
+                for ev in env_vars:
+                    compose += f"      - {ev}\n"
+
 
         # 加载外部依赖，构建 depends_on（含 registry/config + 数据库 condition）
         load_deps = load_deps_from_file(repo_dir) or {}
@@ -514,6 +528,18 @@ services:
             compose += '    ports:\n      - "' + str(port) + ':' + str(port) + '"\n'
 
         compose += "    restart: unless-stopped\n"
+        # Java 服务添加环境变量，覆盖 localhost -> Docker 服务名
+        if lang == "java":
+            env_vars = []
+            if "redis" in ext_services:
+                env_vars.append("SPRING_REDIS_HOST=redis")
+            if "mysql" in ext_services:
+                db_name = ext_deps.get("service_details", {}).get("mysql", {}).get("env_vars", {}).get("MYSQL_DATABASE", "app")
+                env_vars.append(f"SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/{db_name}?useSSL=false&serverTimezone=Asia%2F8&characterEncoding=utf8&allowPublicKeyRetrieval=true")
+            if env_vars:
+                compose += "    environment:\n"
+                for ev in env_vars:
+                    compose += f"      - {ev}\n"
 
         # depends_on
         depends = []
