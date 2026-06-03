@@ -417,6 +417,33 @@ def _build_frontend_for_composite(db: Session, deployment_id: str, deployment: D
 
     log_fn(db, deployment_id, "info", f"Building frontend from {frontend_dir_name}/")
 
+    # 从实际的 package.json 读取构建命令和启动命令（如果扫描器未提取到）
+    import json as _json
+    pkg_json_path = os.path.join(frontend_dir, "package.json")
+    if os.path.exists(pkg_json_path):
+        try:
+            with open(pkg_json_path) as _f:
+                pkg_data = _json.load(_f)
+            scripts = pkg_data.get("scripts", {})
+            # 构建命令：优先 build:prod，再 build，最后 npm run build
+            if not frontend_info.get("build_cmd") and not frontend_info.get("build_command"):
+                for key in ["build:prod", "build:stage", "build", "build:dist"]:
+                    if key in scripts:
+                        frontend_info["build_command"] = f"npm run {key}"
+                        log_fn(db, deployment_id, "info", f"Detected build command: {frontend_info['build_command']}")
+                        break
+            # 启动命令（serve）：检测是否有 serve 脚本，否则使用 nginx
+            if not frontend_info.get("start_cmd") and not frontend_info.get("start_command"):
+                if "serve" in scripts:
+                    frontend_info["start_command"] = "npm run serve"
+                else:
+                    # 无 serve 脚本 → 静态文件，使用 nginx
+                    frontend_info["start_command"] = "nginx"
+                    frontend_info["framework"] = "static"
+                    log_fn(db, deployment_id, "info", "Detected static frontend, will use nginx")
+        except Exception as e:
+            log_fn(db, deployment_id, "warning", f"Failed to read package.json: {e}")
+
     # 生成前端 Dockerfile
     docker_service.generate_dockerfile(frontend_info, frontend_dir)
 

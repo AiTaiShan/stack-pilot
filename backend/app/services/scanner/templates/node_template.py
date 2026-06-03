@@ -15,7 +15,7 @@ def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "", ver
         port: 应用监听端口
         build_cmd: 构建命令（如 npm run build、pnpm run build、yarn build）
         start_cmd: 启动命令（如 npm start、pnpm start、yarn start）
-        framework: 框架名称（如 "next"、"nextjs"）
+        framework: 框架名称（如 "next"、"nextjs"、"static"）
 
     Returns:
         Dockerfile 内容字符串
@@ -28,6 +28,9 @@ def generate(port: int, build_cmd: str, start_cmd: str, framework: str = "", ver
 
     if framework.lower() in ("next", "nextjs"):
         return _nextjs_template(port, install_cmd, build_cmd, start_cmd)
+
+    if framework.lower() == "static" or "nginx" in start_cmd:
+        return _static_frontend_template(port, install_cmd, build_cmd)
 
     return _node_template(port, install_cmd, build_cmd, start_cmd)
 
@@ -70,6 +73,27 @@ COPY --from=builder /app/public ./public
 ENV NODE_ENV=production
 EXPOSE {port}
 CMD ["sh", "-c", "{start_cmd}"]
+"""
+
+
+def _static_frontend_template(port: int, install_cmd: str, build_cmd: str, version: str = "18") -> str:
+    """
+    静态前端 Dockerfile（Vue/React 等构建后由 nginx 托管）
+    多阶段构建：node 构建 → nginx 运行
+    """
+    node_image = f"node:{version}-alpine"
+    return f"""FROM {node_image} AS builder
+WORKDIR /app
+COPY package*.json ./
+{install_cmd}
+COPY . .
+RUN {build_cmd}
+
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/build /usr/share/nginx/html
+EXPOSE {port}
+CMD ["nginx", "-g", "daemon off;"]
 """
 
 
