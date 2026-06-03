@@ -263,9 +263,9 @@ def _cleanup_old_images(db: Session, deployment_id: str, repo_name: str, git_ser
     image_prefix = f"stackpilot/{repo_name}"
 
     try:
-        # 获取当前项目的所有镜像
+        # 按创建时间排序（最新的排第一），避免按字母序误删新镜像
         result = subprocess.run(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", f"reference={image_prefix}*"],
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", f"reference={image_prefix}*", "--sort", "created"],
             capture_output=True, text=True, timeout=30
         )
 
@@ -274,11 +274,13 @@ def _cleanup_old_images(db: Session, deployment_id: str, repo_name: str, git_ser
 
         images = [img.strip() for img in result.stdout.strip().split('\n') if img.strip()]
 
-        if len(images) <= 1:
+        # 保留最近 N 个镜像，支持回滚
+        KEEP_IMAGES = 3
+        if len(images) <= KEEP_IMAGES:
             return
 
-        # 保留最新的镜像，删除旧的
-        images_to_remove = images[1:]  # 跳过第一个（最新的）
+        # 只清理超出保留数量的旧镜像
+        images_to_remove = images[KEEP_IMAGES:]
 
         for img in images_to_remove:
             log_fn(db, deployment_id, "info", f"Cleaning up old image: {img}")
