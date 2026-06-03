@@ -23,16 +23,28 @@ def detect_project_type(ctx: ProjectContext) -> str:
     # 2. 微服务检测
     micro = detect_microservices(ctx)
     if micro and len(micro.get("services", [])) >= 2:
+        # 检查是否有前端目录（Java Spring Cloud 项目可能包含前端）
+        fe_dir = _find_frontend_directory(ctx)
+        if fe_dir:
+            return "microservices-with-frontend"
         return "microservices"
 
     # 3. Java 多模块检测（Maven）
     multi = detect_multi_module_java(ctx)
     if multi:
+        # 检查是否有前端目录（Java Spring Cloud 项目可能包含前端）
+        fe_dir = _find_frontend_directory(ctx)
+        if fe_dir:
+            return "multi-module-java-with-frontend"
         return "multi-module-java"
 
     # 3b. Java 多模块检测（Gradle）
     gradle_multi = detect_multi_module_gradle(ctx)
     if gradle_multi:
+        # 检查是否有前端目录
+        fe_dir = _find_frontend_directory(ctx)
+        if fe_dir:
+            return "multi-module-java-with-frontend"
         return "multi-module-java"
 
     # 4. 传统 monorepo 检测（前后端分离）
@@ -212,38 +224,17 @@ def _detect_service(ctx: ProjectContext, dir_path: str, name: str) -> Optional[d
 
 
 def detect_monorepo(ctx: ProjectContext) -> Optional[dict]:
-    frontend_dirs = ["frontend", "client", "web", "ui", "app", "apps",
-                     "packages/web", "packages/client", "src/web"]
-    backend_dirs = ["backend", "server", "api", "services", "apps/api",
-                    "packages/api", "packages/server", "src/api", "src/server"]
-    fe_dir = None
-    be_dir = None
-    for d in frontend_dirs:
-        if ctx.is_dir(d):
-            fe_files, _ = ctx.list_dir(d)
-            if "package.json" in fe_files or "index.html" in fe_files:
-                fe_dir = d
-                break
-    for d in backend_dirs:
-        if ctx.is_dir(d):
-            be_files, _ = ctx.list_dir(d)
-            backend_indicators = ["requirements.txt", "pom.xml", "go.mod",
-                                  "main.py", "app.py", "package.json", "build.gradle",
-                                  "pyproject.toml", "Cargo.toml"]
-            if any(f in be_files for f in backend_indicators):
-                be_dir = d
-                break
+    """检测前后端分离的 monorepo 项目（动态扫描所有子目录）"""
+    # 动态扫描所有子目录，查找前端项目
+    fe_dir = _find_frontend_directory(ctx)
+
+    # 动态扫描所有子目录，查找后端项目
+    be_dir = _find_backend_directory(ctx)
+
     if fe_dir and be_dir:
         be_files, _ = ctx.list_dir(be_dir)
-        fe_info = {"language": "node", "port": 3000}
-        # 前端框架检测
-        for cfg, fw in [("next.config.js", "next"), ("next.config.ts", "next"),
-                        ("next.config.mjs", "next"), ("nuxt.config.ts", "nuxt"),
-                        ("nuxt.config.js", "nuxt"), ("vue.config.js", "vue"),
-                        ("vite.config.ts", "vite"), ("vite.config.js", "vite")]:
-            if ctx.exists(os.path.join(fe_dir, cfg)):
-                fe_info["framework"] = fw
-                break
+        fe_info = _detect_frontend_info(ctx, fe_dir)
+
         be_info = {}
         if "requirements.txt" in be_files or "setup.py" in be_files or "pyproject.toml" in be_files:
             be_info = {"language": "python", "port": 8000}
@@ -258,6 +249,199 @@ def detect_monorepo(ctx: ProjectContext) -> Optional[dict]:
         return {"type": "monorepo", "frontend": {"dir": fe_dir, **fe_info},
                 "backend": {"dir": be_dir, **be_info}}
     return None
+
+
+def _find_frontend_directory(ctx: ProjectContext) -> Optional[str]:
+    """动态扫描所有子目录，查找前端项目"""
+    skip_dirs = {".git", "node_modules", "target", ".mvn", "__pycache__",
+                 ".idea", ".vscode", ".stackpilot", "sql", "docs", "doc",
+                 "test", "tests", "scripts", "deploy", "docker"}
+
+    files, dirs = ctx.list_dir(".")
+
+    for d in dirs:
+        # 跳过隐藏目录和常见的非项目目录
+        if d.startswith(".") or d.lower() in skip_dirs:
+            continue
+
+        # 检查子目录是否是前端项目
+        if _is_frontend_directory(ctx, d):
+            return d
+
+    return None
+
+
+def _is_frontend_directory(ctx: ProjectContext, dir_name: str) -> bool:
+    """判断一个目录是否是前端项目"""
+    if not ctx.is_dir(dir_name):
+        return False
+
+    files, _ = ctx.list_dir(dir_name)
+
+    # 必须有 package.json
+    if "package.json" not in files:
+        return False
+
+    # 检查 package.json 中是否有前端框架依赖
+    pkg = ctx.read_json(os.path.join(dir_name, "package.json"))
+    if pkg is None:
+        return False
+
+    deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+
+    # 后端框架列表（如果检测到这些，就不是前端）
+    backend_frameworks = {
+        "express", "fastify", "koa", "hapi", "nest", "@nestjs/core",
+        "fastify", "hono", "elysia", "trpc", "@trpc/server",
+        "sequelize", "typeorm", "prisma", "drizzle-orm",
+        "mongoose", "mongodb", "pg", "mysql2", "sqlite3",
+        "jsonwebtoken", "bcrypt", "passport",
+        "socket.io", "ws",
+    }
+
+    # 如果有后端框架依赖，不是前端
+    has_backend_dep = any(dep in deps for dep in backend_frameworks)
+    if has_backend_dep:
+        return False
+
+    # 前端框架列表（必须是明确的前端框架）
+    frontend_frameworks = {
+        "react", "react-dom", "vue", "vue-router", "pinia", "vuex",
+        "@angular/core", "svelte", "solid-js", "preact",
+        "next", "nuxt", "gatsby", "remix",
+        "element-ui", "element-plus", "antd", "ant-design-vue",
+        "vant", "naive-ui", "arco-design",
+        "@emotion/react", "@emotion/styled", "styled-components",
+        "tailwindcss", "postcss", "sass", "less",
+    }
+
+    # 检查是否有前端框架依赖
+    has_frontend_dep = any(dep in deps for dep in frontend_frameworks)
+
+    # 或者检查是否有前端配置文件（更严格的检查）
+    frontend_configs = [
+        "vite.config.ts", "vite.config.js", "vite.config.mjs",
+        "next.config.js", "next.config.ts", "next.config.mjs",
+        "nuxt.config.ts", "nuxt.config.js",
+        "vue.config.js", "angular.json",
+        "svelte.config.js", "svelte.config.mjs",
+    ]
+    has_frontend_config = any(ctx.exists(os.path.join(dir_name, cfg)) for cfg in frontend_configs)
+
+    # 或者检查是否有 index.html（必须在根目录或 public 目录）
+    has_index_html = "index.html" in files or ctx.exists(os.path.join(dir_name, "public", "index.html"))
+
+    # 检查 src 目录下是否有前端文件（更严格的检查）
+    src_dir = os.path.join(dir_name, "src")
+    has_src = ctx.is_dir(src_dir)
+    has_frontend_files = False
+    if has_src:
+        src_files, _ = ctx.list_dir(src_dir)
+        # 只检查明确的前端文件扩展名
+        frontend_extensions = {".jsx", ".tsx", ".vue", ".svelte"}
+        has_frontend_files = any(
+            any(f.endswith(ext) for ext in frontend_extensions)
+            for f in src_files
+        )
+
+    # 组合判断：必须有明确的前端特征
+    return has_frontend_dep or has_frontend_config or (has_index_html and has_frontend_files)
+
+
+def _find_backend_directory(ctx: ProjectContext) -> Optional[str]:
+    """动态扫描所有子目录，查找后端项目"""
+    skip_dirs = {".git", "node_modules", "target", ".mvn", "__pycache__",
+                 ".idea", ".vscode", ".stackpilot", "sql", "docs", "doc",
+                 "test", "tests", "scripts", "deploy", "docker"}
+
+    files, dirs = ctx.list_dir(".")
+
+    # 后端项目特征文件
+    backend_indicators = [
+        "pom.xml", "build.gradle",  # Java
+        "requirements.txt", "pyproject.toml", "setup.py", "Pipfile",  # Python
+        "go.mod",  # Go
+        "Cargo.toml",  # Rust
+        "composer.json",  # PHP
+        "Gemfile",  # Ruby
+        "*.csproj",  # .NET
+    ]
+
+    for d in dirs:
+        # 跳过隐藏目录和常见的非项目目录
+        if d.startswith(".") or d.lower() in skip_dirs:
+            continue
+
+        # 跳过前端目录（避免误判）
+        if _is_frontend_directory(ctx, d):
+            continue
+
+        # 检查子目录是否是后端项目
+        if _is_backend_directory(ctx, d):
+            return d
+
+    return None
+
+
+def _is_backend_directory(ctx: ProjectContext, dir_name: str) -> bool:
+    """判断一个目录是否是后端项目"""
+    if not ctx.is_dir(dir_name):
+        return False
+
+    files, _ = ctx.list_dir(dir_name)
+
+    # 后端项目特征文件
+    backend_indicators = [
+        "pom.xml", "build.gradle",  # Java
+        "requirements.txt", "pyproject.toml", "setup.py", "Pipfile",  # Python
+        "go.mod",  # Go
+        "Cargo.toml",  # Rust
+        "composer.json",  # PHP
+        "Gemfile",  # Ruby
+    ]
+
+    # 检查是否有后端特征文件
+    if any(f in files for f in backend_indicators):
+        return True
+
+    # 检查是否有 src/main 目录结构（Java 项目）
+    if ctx.is_dir(os.path.join(dir_name, "src", "main")):
+        return True
+
+    # 检查是否有 app.py、main.py 等入口文件
+    entry_files = ["app.py", "main.py", "manage.py", "server.py", "index.py"]
+    if any(f in files for f in entry_files):
+        return True
+
+    return False
+
+
+def _detect_frontend_info(ctx: ProjectContext, fe_dir: str) -> dict:
+    """检测前端项目的详细信息"""
+    fe_info = {"language": "node", "port": 3000}
+
+    # 前端框架检测
+    for cfg, fw in [("next.config.js", "next"), ("next.config.ts", "next"),
+                    ("next.config.mjs", "next"), ("nuxt.config.ts", "nuxt"),
+                    ("nuxt.config.js", "nuxt"), ("vue.config.js", "vue"),
+                    ("vite.config.ts", "vite"), ("vite.config.js", "vite"),
+                    ("angular.json", "angular"), ("svelte.config.js", "svelte")]:
+        if ctx.exists(os.path.join(fe_dir, cfg)):
+            fe_info["framework"] = fw
+            break
+
+    # 端口检测（从 vite.config、package.json scripts 等）
+    pkg = ctx.read_json(os.path.join(fe_dir, "package.json"))
+    if pkg:
+        scripts = pkg.get("scripts", {})
+        dev_script = scripts.get("dev", "") or scripts.get("start", "")
+        # 从 dev 脚本中提取端口
+        import re
+        port_match = re.search(r'--port\s+(\d+)', dev_script)
+        if port_match:
+            fe_info["port"] = int(port_match.group(1))
+
+    return fe_info
 
 
 def detect_monorepo_modern(ctx: ProjectContext) -> Optional[dict]:

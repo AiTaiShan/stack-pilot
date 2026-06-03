@@ -103,8 +103,10 @@ def detect(repo_dir: str) -> ScanResult:
                     langs.add(s["language"])
             # 同时检测前端（如 ruoyi-ui）
             frontend_fe = _detect_micro_frontend(ctx)
+            # 根据是否有前端信息确定项目类型
+            project_type = "microservices-with-frontend" if frontend_fe else "microservices"
             result = ScanResult(
-                project_type="microservices", languages=list(langs),
+                project_type=project_type, languages=list(langs),
                 language=list(langs)[0] if langs else "java",
                 services=services, key_files={}, dependencies={},
                 frontend=frontend_fe,
@@ -156,7 +158,7 @@ def detect(repo_dir: str) -> ScanResult:
             project_type="monorepo",
             languages=[fe.get("language", "node"), be.get("language", "python")],
             frontend=FrontendInfo(
-                dir=fe.get("dir", "frontend"), language=fe.get("language", "node"),
+                dir=fe.get("dir", ""), language=fe.get("language", "node"),
                 framework=fe.get("framework"), port=fe.get("port", 3000),
                 build_cmd=fe.get("build_command", ""), start_cmd=fe.get("start_command", ""),
             ),

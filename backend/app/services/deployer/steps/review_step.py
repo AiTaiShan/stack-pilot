@@ -241,14 +241,14 @@ def _generate_monorepo_files(repo_dir: str, project_info: dict):
         docker_service = None  # 将在调用时传入
         # docker_service.generate_dockerfile(backend, backend_dir)
     if frontend:
-        frontend_dir = os.path.join(repo_dir, frontend.get("dir", "frontend"))
+        frontend_dir = os.path.join(repo_dir, frontend.get("dir", ""))
         # docker_service.generate_dockerfile(frontend, frontend_dir)
 
 
 def _generate_frontend_dockerfile(repo_dir: str, project_info: dict):
     """为组合项目生成前端 Dockerfile"""
     frontend_info = project_info.get("frontend", {})
-    frontend_dir_name = frontend_info.get("dir", "frontend")
+    frontend_dir_name = frontend_info.get("dir", "")
     frontend_dir = os.path.join(repo_dir, frontend_dir_name)
     if os.path.isdir(frontend_dir):
         docker_service = None  # 将在调用时传入

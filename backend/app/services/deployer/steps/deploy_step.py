@@ -119,15 +119,15 @@ def _deploy_to_local(db: Session, deployment: Deployment, git_service, log_fn, d
         image = deployment.image_tag
 
         # 停止旧容器
+        log_fn(db, deployment_id, "info", f"Stopping old container: {app_name}")
         subprocess.run(["docker", "rm", "-f", app_name], capture_output=True, timeout=30)
 
         # 启动新容器
         cmd = ["docker", "run", "-d", "--name", app_name, "-p", f"{port}:{port}", image]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
-        # 清理悬空资源
+        # 清理悬空容器（不删除卷，保护数据）
         subprocess.run(["docker", "container", "prune", "-f"], capture_output=True, timeout=30)
-        subprocess.run(["docker", "volume", "prune", "-f"], capture_output=True, timeout=30)
 
         if result.returncode != 0:
             raise AppError(
@@ -153,11 +153,26 @@ def _deploy_compose_local(db: Session, deployment: Deployment, repo_dir: str, re
 
     project_name = f"stackpilot-{repo_name}"
 
-    # 停止旧服务并清理资源
+    # 停止旧服务并清理资源（不删除数据卷，保护数据库数据）
+    log_fn(db, deployment_id, "info", f"Stopping old compose project: {project_name}")
     subprocess.run(
-        ["docker-compose", "-p", project_name, "-f", compose_file, "down", "--volumes", "--remove-orphans"],
+        ["docker-compose", "-p", project_name, "-f", compose_file, "down", "--remove-orphans"],
         capture_output=True, timeout=60
     )
+
+    # 额外清理：移除可能残留的同名容器
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--filter", f"name={project_name}", "-q"],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.stdout.strip():
+            container_ids = result.stdout.strip().split('\n')
+            for cid in container_ids:
+                subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=15)
+            log_fn(db, deployment_id, "info", f"Cleaned up {len(container_ids)} residual containers")
+    except Exception as e:
+        log_fn(db, deployment_id, "warning", f"Residual container cleanup failed: {e}")
 
     # 预拉取外部镜像（避免 up 时超时）
     log_fn(db, deployment_id, "info", "Pulling external images first...")

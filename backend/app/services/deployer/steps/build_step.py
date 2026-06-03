@@ -461,9 +461,8 @@ def _build_frontend_for_composite(db: Session, deployment_id: str, deployment: D
                     gateway_name = svc["name"]
                     break
 
-        # 从项目配置中读取 API 前缀和 gateway 端口
+        # 从项目配置中读取 API 前缀
         api_prefix = "/prod-api"  # 默认值
-        gateway_port = 8080       # 默认值
         # 从 .env.production 读取 API 前缀
         env_prod_path = os.path.join(frontend_dir, ".env.production")
         if os.path.exists(env_prod_path):
@@ -478,16 +477,13 @@ def _build_frontend_for_composite(db: Session, deployment_id: str, deployment: D
                                 api_prefix = _val
                                 log_fn(db, deployment_id, "info", f"Detected API prefix from .env.production: {api_prefix}")
                                 break
-        # 从 vue.config.js 或 application.yml 读取 gateway 端口
-        vue_config_path = os.path.join(frontend_dir, "vue.config.js")
-        if os.path.exists(vue_config_path):
-            with open(vue_config_path) as _vc_f:
-                _vc_content = _vc_f.read()
-            import re as _re
-            _m = _re.search(r'target[\s:]*["\'`]http://[^:]+:(\d+)', _vc_content)
-            if _m:
-                gateway_port = int(_m.group(1))
-                log_fn(db, deployment_id, "info", f"Detected gateway port from vue.config.js: {gateway_port}")
+        # 从 services 列表中读取 gateway 端口（Docker 内部端口，不是宿主机端口）
+        gateway_port = 8080  # 默认值
+        for svc in services:
+            if svc.get("name") == gateway_name:
+                gateway_port = svc.get("port", 8080)
+                log_fn(db, deployment_id, "info", f"Detected gateway port from services: {gateway_port}")
+                break
 
         # 写入 nginx.conf 包含反向代理配置
         nginx_conf_path = os.path.join(frontend_dir, "nginx.conf")

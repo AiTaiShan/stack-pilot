@@ -30,7 +30,7 @@ app.add_middleware(
 # 安全中间件（按顺序添加，最后添加的最先执行）
 # SecurityHeaders → RateLimit → RequestLogging
 app.add_middleware(RequestLoggingMiddleware)
-app.add_middleware(RateLimitMiddleware, requests_per_minute=60)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=300)  # 提高到 300 次/分钟
 app.add_middleware(SecurityHeadersMiddleware)
 
 # 注册API路由

@@ -1,6 +1,7 @@
 """deployment_manager.py — 部署编排器（协调各步骤模块）"""
 import json
 import os
+import subprocess
 import uuid
 import threading
 import logging
@@ -482,6 +483,51 @@ class DeploymentManager:
         self._log(db, deployment_id, "info", "Deployment cancelled, cleaning up resources...")
         monitoring_service.record_deployment_end(deployment_id, False)
         self._rollback_resources(db, deployment_id)
+
+
+    def _rollback_resources(self, db: Session, deployment_id: str):
+        """回滚部署资源：停止/移除所有已启动的容器"""
+        deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+        if not deployment:
+            logger.warning("_rollback_resources: deployment not found: %s", deployment_id)
+            return
+
+        repo_dir = getattr(deployment, '_repo_dir', '') or (deployment.config or {}).get('_repo_dir', '')
+        if not repo_dir:
+            logger.warning("_rollback_resources: no repo_dir found for deployment: %s", deployment_id)
+            return
+
+        repo_name = os.path.basename(repo_dir.rstrip('/'))
+        project_name = f"stackpilot-{repo_name}"
+        compose_file = os.path.join(repo_dir, "docker-compose.yml")
+
+        try:
+            if os.path.exists(compose_file):
+                # 使用 docker-compose down 清理所有服务
+                logger.info("_rollback_resources: stopping compose project: %s", project_name)
+                result = subprocess.run(
+                    ["docker-compose", "-p", project_name, "-f", compose_file, "down", "--remove-orphans"],
+                    capture_output=True, text=True, timeout=120
+                )
+                if result.returncode == 0:
+                    logger.info("_rollback_resources: compose project stopped successfully: %s", project_name)
+                else:
+                    logger.warning("_rollback_resources: compose down failed: %s", result.stderr[:500])
+            else:
+                # 尝试清理单个容器
+                app_name = (deployment.config or {}).get("app_name", "")
+                if app_name:
+                    logger.info("_rollback_resources: removing container: %s", app_name)
+                    subprocess.run(["docker", "rm", "-f", app_name], capture_output=True, timeout=30)
+
+            # 清理悬空资源
+            subprocess.run(["docker", "container", "prune", "-f"], capture_output=True, timeout=30)
+            logger.info("_rollback_resources: cleanup completed for deployment: %s", deployment_id)
+
+        except subprocess.TimeoutExpired:
+            logger.error("_rollback_resources: timeout during cleanup for deployment: %s", deployment_id)
+        except Exception as e:
+            logger.error("_rollback_resources: error during cleanup: %s", str(e))
 
 
     def _handle_pause(self, db: Session, deployment_id: str, deployment: Deployment, step: str, step_index: int):
