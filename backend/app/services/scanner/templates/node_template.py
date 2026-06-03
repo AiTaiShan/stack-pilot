@@ -92,6 +92,8 @@ RUN {build_cmd}
 FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY --from=builder /app/build /usr/share/nginx/html
+# 如果有 nginx.conf，复制自定义配置（包含反向代理）
+COPY nginx.conf /etc/nginx/nginx.conf
 EXPOSE {port}
 CMD ["nginx", "-g", "daemon off;"]
 """

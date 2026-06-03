@@ -444,7 +444,65 @@ def _build_frontend_for_composite(db: Session, deployment_id: str, deployment: D
         except Exception as e:
             log_fn(db, deployment_id, "warning", f"Failed to read package.json: {e}")
 
-    # 生成前端 Dockerfile
+    # 生成前端 Dockerfile 和 nginx.conf（如果是静态前端）
+    framework = frontend_info.get("framework", "")
+    start_cmd = frontend_info.get("start_command", frontend_info.get("start_cmd", ""))
+    if framework == "static" or "nginx" in start_cmd:
+        # 查找 gateway 服务名
+        services = project_info.get("services", [])
+        gateway_name = "gateway"
+        for svc in services:
+            if svc.get("type") == "gateway":
+                gateway_name = svc["name"]
+                break
+        else:
+            for svc in services:
+                if "gateway" in svc.get("name", "").lower():
+                    gateway_name = svc["name"]
+                    break
+
+        # 写入 nginx.conf 包含反向代理配置
+        nginx_conf_path = os.path.join(frontend_dir, "nginx.conf")
+        with open(nginx_conf_path, "w") as f:
+            f.write(f"""worker_processes  1;
+
+events {{
+    worker_connections  1024;
+}}
+
+http {{
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile        on;
+    keepalive_timeout  65;
+
+    server {{
+        listen       {frontend_info.get('port', 80)};
+        server_name  localhost;
+
+        location / {{
+            root   /usr/share/nginx/html;
+            try_files $uri $uri/ /index.html;
+            index  index.html index.htm;
+        }}
+
+        location /prod-api/ {{
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header REMOTE-HOST $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_pass http://{gateway_name}:8080/;
+        }}
+
+        error_page   500 502 503 504  /50x.html;
+        location = /50x.html {{
+            root   html;
+        }}
+    }}
+}}
+""")
+        log_fn(db, deployment_id, "info", f"Generated nginx.conf with proxy to {gateway_name}:8080")
+
     docker_service.generate_dockerfile(frontend_info, frontend_dir)
 
     # 构建前端镜像
