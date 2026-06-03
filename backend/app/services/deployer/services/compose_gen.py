@@ -451,38 +451,18 @@ services:
         frontend_name = frontend_info.get("name", "frontend")
 
         # 动态查找 gateway 服务名
+        # 优先按 type 查找，再按名称中包含 gateway 回退
         gateway_name = "gateway"
         for svc in services:
             if svc.get("type") == "gateway":
                 gateway_name = svc["name"]
                 break
-
-        compose += f"""  {frontend_name}:
-    image: {frontend_image}
-    ports:
-      - "{frontend_port}:{frontend_port}"
-    restart: unless-stopped
-    depends_on:
-      - {gateway_name}
-
-"""
-
-    # 收集前端服务的目录名，用于后续跳过
-    frontend_dir_names = set()
-    if frontend_info:
-        frontend_dir_names.add(frontend_info.get("dir", ""))
-
-    # 如果有前端镜像，先添加前端服务
-    if frontend_image and frontend_info:
-        frontend_port = frontend_info.get("port", 3000)
-        frontend_name = frontend_info.get("name", "frontend")
-
-        # 动态查找 gateway 服务名
-        gateway_name = "gateway"
-        for svc in services:
-            if svc.get("type") == "gateway":
-                gateway_name = svc["name"]
-                break
+        else:
+            # 回退：按名称中包含 gateway 查找
+            for svc in services:
+                if "gateway" in svc.get("name", "").lower():
+                    gateway_name = svc["name"]
+                    break
 
         compose += f"""  {frontend_name}:
     image: {frontend_image}
