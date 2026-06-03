@@ -110,8 +110,15 @@ def _detect_project_type(repo_dir: str, deployment, db: Session, deployment_id: 
         "version": scan_result.version if hasattr(scan_result, 'version') and scan_result.version else "",
     }
 
-    # 多模块 Java 项目：规则引擎未提取 version，这里主动读取 pom.xml
-    if scan_result.project_type in ("multi-module-java", "multi-module-java-with-frontend") and not detected.get("version"):
+    # Java 项目：规则引擎未提取 version，这里主动读取 pom.xml
+    # 支持所有 Java 项目类型：multi-module-java、microservices、以及带前端的变体
+    java_project_types = ("multi-module-java", "multi-module-java-with-frontend",
+                          "microservices", "microservices-with-frontend")
+    # 注意：scan_result.language 可能是 "node"（混合项目），所以用 languages 列表或 project_type 来判断
+    has_java = (scan_result.language == "java"
+                or any(l == "java" for l in getattr(scan_result, 'languages', []))
+                or scan_result.project_type in java_project_types)
+    if scan_result.project_type in java_project_types and has_java and not detected.get("version"):
         pom_path = os.path.join(repo_dir, "pom.xml")
         if os.path.exists(pom_path):
             import re as _re
@@ -218,11 +225,13 @@ def _llm_review_detection(repo_dir: str, detected: dict, db: Session, deployment
                 }
                 frontend_info["dir"] = review["frontend_dir"]
                 detected["frontend"] = frontend_info
-                # 升级类型
-                if detected.get("type") == "multi-module-java":
-                    detected["type"] = "multi-module-java-with-frontend"
-                elif detected.get("type") == "microservices":
-                    detected["type"] = "microservices-with-frontend"
+
+        # 确保项目类型正确反映是否有前端
+        if detected.get("frontend"):
+            if detected.get("type") == "multi-module-java":
+                detected["type"] = "multi-module-java-with-frontend"
+            elif detected.get("type") == "microservices":
+                detected["type"] = "microservices-with-frontend"
 
         if review.get("java_version"):
             detected["java_version"] = int(review["java_version"])
@@ -242,6 +251,15 @@ def _llm_review_detection(repo_dir: str, detected: dict, db: Session, deployment
             for svc in detected.get("services", []):
                 ai_svc = next((s for s in review["services"] if s.get("name") == svc["name"]), None)
                 if ai_svc and ai_svc.get("type") != svc.get("type"):
+                    # 保护：不允许 LLM 将 "common" 类型改为其他类型
+                    # common 模块是库/依赖，不应该作为独立容器运行
+                    if svc.get("type") == "common":
+                        logger.info("Protecting common service from LLM override: %s (kept type=%s, rejected type=%s)",
+                                   svc["name"], svc["type"], ai_svc.get("type"))
+                        continue
+                    if "common" in svc.get("name", "").lower():
+                        logger.info("Protecting service with 'common' in name from LLM override: %s", svc["name"])
+                        continue
                     svc["type"] = ai_svc["type"]
                     corrected = True
             if corrected:
