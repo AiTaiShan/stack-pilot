@@ -11,6 +11,8 @@ from app.models.deployment import Deployment, DeploymentStatus
 from app.services.deployer.services.env_review import (
     update_compose_service_env,
     delete_compose_service_env_var,
+    read_compose_file,
+    write_compose_file,
 )
 import logging
 
@@ -220,6 +222,57 @@ async def rollback_deployment(
         "message": "success",
         "data": {"rolled_back": True},
     }
+
+
+@router.get("/{deployment_id}/compose-file", response_model=dict)
+async def get_compose_file(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+):
+    """获取 docker-compose.yml 文件内容"""
+    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    repo_dir = _get_repo_dir(deployment)
+    try:
+        content = read_compose_file(repo_dir)
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {"content": content},
+        }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Compose file not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read compose file: {str(e)}")
+
+
+@router.put("/{deployment_id}/compose-file", response_model=dict)
+async def update_compose_file(
+    deployment_id: str,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    """保存 docker-compose.yml 文件内容"""
+    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    content = data.get("content")
+    if not content:
+        raise HTTPException(status_code=400, detail="Content is required")
+
+    repo_dir = _get_repo_dir(deployment)
+    try:
+        success = write_compose_file(repo_dir, content)
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {"saved": success},
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid YAML format: {str(e)}")
 
 
 @router.delete("/all", response_model=dict)
