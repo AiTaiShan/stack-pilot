@@ -27,7 +27,7 @@ const statusLabels: Record<string, string> = {
   failed: '失败',
   rolling_back: '回滚中',
   rolled_back: '已回滚',
-  waiting_review: '待审核',
+  waiting_review: '等待审核',
 }
 
 const formatDate = (dateStr: string) => {
@@ -43,7 +43,6 @@ const Deployments: React.FC = () => {
   const [selectedDeployment, setSelectedDeployment] = useState<any>(null)
   const [envReviewOpen, setEnvReviewOpen] = useState(false)
   const [envReviewDeploymentId, setEnvReviewDeploymentId] = useState<string>('')
-  const [userClosedReview, setUserClosedReview] = useState(false)
 
   const fetchDeployments = async () => {
     setLoading(true)
@@ -93,20 +92,8 @@ const Deployments: React.FC = () => {
         // 同时刷新部署列表
         fetchDeployments()
 
-        // 发现 waiting_review 时自动打开审核弹窗
-        if (updated.status === 'waiting_review' && !userClosedReview) {
-          setEnvReviewDeploymentId(updated.id)
-          setEnvReviewOpen(true)
-        }
-
-        // 状态变为 running 时重置用户关闭标记
-        if (updated.status === 'running') {
-          setUserClosedReview(false)
-        }
-
-        // 如果部署完成或取消，重置审核关闭标记并停止刷新
+        // 如果部署完成或取消，停止刷新
         if (['success', 'failed', 'cancelled'].includes(updated.status)) {
-          setUserClosedReview(false)
           clearInterval(interval)
         }
       } catch (error) {
@@ -115,7 +102,7 @@ const Deployments: React.FC = () => {
     }, 3000)
 
     return () => clearInterval(interval)
-  }, [drawerVisible, selectedDeployment?.id, selectedDeployment?.status, userClosedReview])
+  }, [drawerVisible, selectedDeployment?.id, selectedDeployment?.status])
 
   const handleCancel = async (deploymentId: string) => {
     try {
@@ -127,12 +114,12 @@ const Deployments: React.FC = () => {
     }
   }
 
-  // 全局轮询：检测列表中是否有 waiting_review 状态的部署
+  // 全局轮询：检测列表中是否有 running 状态的部署
   useEffect(() => {
-    const hasWaitingReview = deployments.some(
-      (d: any) => d.status === 'waiting_review' || d.status === 'running' || d.status === 'paused',
+    const hasRunning = deployments.some(
+      (d: any) => d.status === 'running' || d.status === 'paused',
     )
-    if (!hasWaitingReview) return
+    if (!hasRunning) return
 
     const interval = setInterval(async () => {
       try {
@@ -145,27 +132,17 @@ const Deployments: React.FC = () => {
     return () => clearInterval(interval)
   }, [deployments.length])
 
-  // 检测列表中的 waiting_review 部署并自动弹出审核弹窗
-  useEffect(() => {
-    if (userClosedReview) return
-
-    const waitingDeployment = deployments.find(
-      (d: any) => d.status === 'waiting_review',
-    )
-    if (waitingDeployment) {
-      setEnvReviewDeploymentId(waitingDeployment.id)
-      setEnvReviewOpen(true)
-    }
-  }, [deployments, userClosedReview])
+  const openEnvReview = (deployment: any) => {
+    setEnvReviewDeploymentId(deployment.id)
+    setEnvReviewOpen(true)
+  }
 
   const handleReviewClose = () => {
     setEnvReviewOpen(false)
-    setUserClosedReview(true)
   }
 
   const handleReviewConfirmed = () => {
     setEnvReviewOpen(false)
-    setUserClosedReview(false)
     fetchDeployments()
   }
 
@@ -201,7 +178,12 @@ const Deployments: React.FC = () => {
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openDrawer(record)}>
             详情
           </Button>
-          {(record.status === 'running' || record.status === 'paused') && (
+          {record.status === 'waiting_review' && (
+            <Button type="link" size="small" style={{ color: '#faad14' }} onClick={() => openEnvReview(record)}>
+              审核
+            </Button>
+          )}
+          {(record.status === 'running' || record.status === 'paused' || record.status === 'waiting_review') && (
             <Popconfirm
               title="确定要终止此部署吗？"
               onConfirm={() => handleCancel(record.id)}

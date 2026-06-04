@@ -16,6 +16,7 @@ const statusColors: Record<string, string> = {
   failed: 'error',
   rolling_back: 'warning',
   rolled_back: 'default',
+  waiting_review: 'warning',
 }
 
 const statusLabels: Record<string, string> = {
@@ -27,6 +28,7 @@ const statusLabels: Record<string, string> = {
   failed: '失败',
   rolling_back: '回滚中',
   rolled_back: '已回滚',
+  waiting_review: '待审核',
 }
 
 const ProjectDetail: React.FC = () => {
@@ -155,6 +157,11 @@ const ProjectDetail: React.FC = () => {
     setDrawerVisible(true)
   }
 
+  const openEnvReview = (deployment: any) => {
+    setEnvVarDeploymentId(deployment.id)
+    setEnvVarModalVisible(true)
+  }
+
   const handleCancel = async (deploymentId: string) => {
     try {
       await client.post(`/deployments/${deploymentId}/cancel`)
@@ -234,7 +241,12 @@ const ProjectDetail: React.FC = () => {
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openDrawer(record)}>
             详情
           </Button>
-          {(record.status === 'running' || record.status === 'paused') && (
+          {record.status === 'waiting_review' && (
+            <Button type="link" size="small" style={{ color: '#faad14' }} onClick={() => openEnvReview(record)}>
+              审核
+            </Button>
+          )}
+          {(record.status === 'running' || record.status === 'paused' || record.status === 'waiting_review') && (
             <Popconfirm
               title="确定要终止此部署吗？"
               onConfirm={() => handleCancel(record.id)}
