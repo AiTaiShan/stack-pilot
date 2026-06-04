@@ -404,7 +404,7 @@ services:
         if lang == "java":
             env_vars = []
             if "redis" in ext_services:
-                env_vars.append("SPRING_REDIS_HOST=redis")
+                env_vars.append("SPRING_DATA_REDIS_HOST=redis")
             if "mysql" in ext_services:
                 # 从 dependencies.json 读取数据库名
                 db_name = ext_deps.get("service_details", {}).get("mysql", {}).get("env_vars", {}).get("MYSQL_DATABASE", "app")
@@ -532,7 +532,7 @@ services:
         if lang == "java":
             env_vars = []
             if "redis" in ext_services:
-                env_vars.append("SPRING_REDIS_HOST=redis")
+                env_vars.append("SPRING_DATA_REDIS_HOST=redis")
             if "mysql" in ext_services:
                 db_name = ext_deps.get("service_details", {}).get("mysql", {}).get("env_vars", {}).get("MYSQL_DATABASE", "app")
                 env_vars.append(f"SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/{db_name}?useSSL=false&serverTimezone=Asia%2F8&characterEncoding=utf8&allowPublicKeyRetrieval=true")
