@@ -342,6 +342,11 @@ class DeploymentManager:
             self._log(db, deployment_id, "info", "No environment variables to review, proceeding...")
             return
 
+        # 进程重启恢复：检查用户是否已经确认过（持久化标志）
+        if config.get("env_vars_confirmed"):
+            self._log(db, deployment_id, "info", "Environment variables already confirmed (persisted), skipping review")
+            return
+
         deployment.status = DeploymentStatus.WAITING_REVIEW
         db.commit()
 
