@@ -404,6 +404,8 @@ services:
         if lang == "java":
             env_vars = []
             if "redis" in ext_services:
+                # 兼容 Spring Boot 2.x 和 3.x+ 的 Redis 配置
+                env_vars.append("SPRING_REDIS_HOST=redis")
                 env_vars.append("SPRING_DATA_REDIS_HOST=redis")
             if "mysql" in ext_services:
                 # 从 dependencies.json 读取数据库名
@@ -532,6 +534,8 @@ services:
         if lang == "java":
             env_vars = []
             if "redis" in ext_services:
+                # 兼容 Spring Boot 2.x 和 3.x+ 的 Redis 配置
+                env_vars.append("SPRING_REDIS_HOST=redis")
                 env_vars.append("SPRING_DATA_REDIS_HOST=redis")
             if "mysql" in ext_services:
                 db_name = ext_deps.get("service_details", {}).get("mysql", {}).get("env_vars", {}).get("MYSQL_DATABASE", "app")
