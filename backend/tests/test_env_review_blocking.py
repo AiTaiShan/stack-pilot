@@ -12,6 +12,17 @@ def _uid():
     return str(_uuid.uuid4())
 
 
+# 用于 mock read_compose_file 的测试数据
+_COMPOSE_WITH_ENV = """\
+version: '3.8'
+services:
+  app:
+    image: test
+    environment:
+      - DB_HOST=localhost
+"""
+
+
 # ========== confirm_env_review 基础测试 ==========
 
 def test_confirm_env_review():
@@ -62,7 +73,7 @@ class TestEnvReviewTimeout:
         manager = DeploymentManager(db=mock_db)
 
         deployment = MagicMock()
-        deployment.config = {"grouped_env_vars": {"app": {"env_vars": {"DB_HOST": {"value": "", "source": "test"}}}}}
+        deployment.config = {"_repo_dir": "/tmp/test"}
         deployment.status = DeploymentStatus.WAITING_REVIEW
 
         deployment_id = _uid()
@@ -73,8 +84,12 @@ class TestEnvReviewTimeout:
 
         with patch("time.time", side_effect=time_values):
             with patch("time.sleep"):
-                with pytest.raises(AppError) as exc_info:
-                    manager._step_env_review(mock_db, deployment_id, deployment)
+                with patch(
+                    "app.services.deployer.deployment_manager.read_compose_file",
+                    return_value=_COMPOSE_WITH_ENV,
+                ):
+                    with pytest.raises(AppError) as exc_info:
+                        manager._step_env_review(mock_db, deployment_id, deployment)
 
         assert exc_info.value.code == ErrorCode.DEPLOYMENT_TIMEOUT
         assert "超时" in str(deployment.error_message)
@@ -87,7 +102,7 @@ class TestEnvReviewTimeout:
         manager = DeploymentManager(db=mock_db)
 
         deployment = MagicMock()
-        deployment.config = {"grouped_env_vars": {"app": {"env_vars": {"DB_HOST": {"value": "", "source": "test"}}}}}
+        deployment.config = {"_repo_dir": "/tmp/test"}
         deployment.status = DeploymentStatus.WAITING_REVIEW
 
         deployment_id = _uid()
@@ -97,8 +112,12 @@ class TestEnvReviewTimeout:
 
         with patch("time.time", side_effect=time_values):
             with patch("time.sleep"):
-                with pytest.raises(AppError):
-                    manager._step_env_review(mock_db, deployment_id, deployment)
+                with patch(
+                    "app.services.deployer.deployment_manager.read_compose_file",
+                    return_value=_COMPOSE_WITH_ENV,
+                ):
+                    with pytest.raises(AppError):
+                        manager._step_env_review(mock_db, deployment_id, deployment)
 
         assert deployment.status == DeploymentStatus.FAILED
 
@@ -110,7 +129,7 @@ class TestEnvReviewTimeout:
         manager = DeploymentManager(db=mock_db)
 
         deployment = MagicMock()
-        deployment.config = {"grouped_env_vars": {"app": {"env_vars": {"DB_HOST": {"value": "", "source": "test"}}}}}
+        deployment.config = {"_repo_dir": "/tmp/test"}
         deployment.status = DeploymentStatus.WAITING_REVIEW
 
         deployment_id = _uid()
@@ -120,8 +139,12 @@ class TestEnvReviewTimeout:
 
         with patch("time.time", side_effect=time_values):
             with patch("time.sleep"):
-                with pytest.raises(AppError):
-                    manager._step_env_review(mock_db, deployment_id, deployment)
+                with patch(
+                    "app.services.deployer.deployment_manager.read_compose_file",
+                    return_value=_COMPOSE_WITH_ENV,
+                ):
+                    with pytest.raises(AppError):
+                        manager._step_env_review(mock_db, deployment_id, deployment)
 
         assert deployment_id not in manager.review_events
 
@@ -139,7 +162,7 @@ class TestEnvReviewCancellation:
         manager = DeploymentManager(db=mock_db)
 
         deployment = MagicMock()
-        deployment.config = {"grouped_env_vars": {"app": {"env_vars": {"DB_HOST": {"value": "", "source": "test"}}}}}
+        deployment.config = {"_repo_dir": "/tmp/test"}
         deployment.status = DeploymentStatus.WAITING_REVIEW
 
         deployment_id = _uid()
@@ -149,8 +172,12 @@ class TestEnvReviewCancellation:
         cancel_event.set()
         manager.cancel_flags[deployment_id] = cancel_event
 
-        with pytest.raises(AppError) as exc_info:
-            manager._step_env_review(mock_db, deployment_id, deployment)
+        with patch(
+            "app.services.deployer.deployment_manager.read_compose_file",
+            return_value=_COMPOSE_WITH_ENV,
+        ):
+            with pytest.raises(AppError) as exc_info:
+                manager._step_env_review(mock_db, deployment_id, deployment)
 
         assert exc_info.value.code == ErrorCode.DEPLOYMENT_CANCELLED
         assert "cancelled" in exc_info.value.message.lower()
@@ -163,7 +190,7 @@ class TestEnvReviewCancellation:
         manager = DeploymentManager(db=mock_db)
 
         deployment = MagicMock()
-        deployment.config = {"grouped_env_vars": {"app": {"env_vars": {"DB_HOST": {"value": "", "source": "test"}}}}}
+        deployment.config = {"_repo_dir": "/tmp/test"}
         deployment.status = DeploymentStatus.WAITING_REVIEW
 
         deployment_id = _uid()
@@ -171,8 +198,12 @@ class TestEnvReviewCancellation:
         cancel_event.set()
         manager.cancel_flags[deployment_id] = cancel_event
 
-        with pytest.raises(AppError):
-            manager._step_env_review(mock_db, deployment_id, deployment)
+        with patch(
+            "app.services.deployer.deployment_manager.read_compose_file",
+            return_value=_COMPOSE_WITH_ENV,
+        ):
+            with pytest.raises(AppError):
+                manager._step_env_review(mock_db, deployment_id, deployment)
 
         assert deployment_id not in manager.review_events
 
@@ -184,7 +215,7 @@ class TestEnvReviewCancellation:
         manager = DeploymentManager(db=mock_db)
 
         deployment = MagicMock()
-        deployment.config = {"grouped_env_vars": {"app": {"env_vars": {"DB_HOST": {"value": "", "source": "test"}}}}}
+        deployment.config = {"_repo_dir": "/tmp/test"}
         deployment.status = DeploymentStatus.WAITING_REVIEW
 
         deployment_id = _uid()
@@ -199,7 +230,11 @@ class TestEnvReviewCancellation:
         confirm_thread.start()
 
         # _step_env_review 应该在确认后正常返回
-        manager._step_env_review(mock_db, deployment_id, deployment)
+        with patch(
+            "app.services.deployer.deployment_manager.read_compose_file",
+            return_value=_COMPOSE_WITH_ENV,
+        ):
+            manager._step_env_review(mock_db, deployment_id, deployment)
 
         confirm_thread.join(timeout=2)
 
@@ -209,26 +244,37 @@ class TestEnvReviewCancellation:
         assert deployment_id not in manager.review_events
 
     def test_no_env_vars_skips_review(self):
-        """没有环境变量时应跳过审核步骤"""
+        """compose 文件中没有 environment 时应跳过审核步骤"""
         from app.services.deployer.deployment_manager import DeploymentManager
 
         mock_db = MagicMock()
         manager = DeploymentManager(db=mock_db)
 
         deployment = MagicMock()
-        deployment.config = {"grouped_env_vars": {}}
+        deployment.config = {"_repo_dir": "/tmp/test"}
         deployment.status = DeploymentStatus.WAITING_REVIEW
 
         deployment_id = _uid()
 
+        compose_no_env = """\
+version: '3.8'
+services:
+  app:
+    image: test
+"""
+
         # 不应抛出异常，直接跳过
-        manager._step_env_review(mock_db, deployment_id, deployment)
+        with patch(
+            "app.services.deployer.deployment_manager.read_compose_file",
+            return_value=compose_no_env,
+        ):
+            manager._step_env_review(mock_db, deployment_id, deployment)
 
         # review_event 不应被创建
         assert deployment_id not in manager.review_events
 
     def test_no_env_vars_in_config_skips_review(self):
-        """config 中无 grouped_env_vars 时应跳过审核"""
+        """config 为空且无 _repo_dir 时应跳过审核（读取失败）"""
         from app.services.deployer.deployment_manager import DeploymentManager
 
         mock_db = MagicMock()
@@ -252,7 +298,7 @@ class TestEnvReviewCancellation:
 
         deployment = MagicMock()
         deployment.config = {
-            "grouped_env_vars": {"app": {"env_vars": {"DB_HOST": {"value": "", "source": "test"}}}},
+            "_repo_dir": "/tmp/test",
             "env_vars_confirmed": True,
         }
         deployment.status = DeploymentStatus.WAITING_REVIEW
@@ -260,7 +306,11 @@ class TestEnvReviewCancellation:
         deployment_id = _uid()
 
         # 应直接跳过，不阻塞
-        manager._step_env_review(mock_db, deployment_id, deployment)
+        with patch(
+            "app.services.deployer.deployment_manager.read_compose_file",
+            return_value=_COMPOSE_WITH_ENV,
+        ):
+            manager._step_env_review(mock_db, deployment_id, deployment)
 
         # review_event 不应被创建
         assert deployment_id not in manager.review_events
@@ -276,7 +326,7 @@ class TestEnvReviewCancellation:
 
         deployment = MagicMock()
         deployment.config = {
-            "grouped_env_vars": {"app": {"env_vars": {"DB_HOST": {"value": "", "source": "test"}}}},
+            "_repo_dir": "/tmp/test",
             "env_vars_confirmed": True,
         }
         deployment.status = DeploymentStatus.WAITING_REVIEW
@@ -286,7 +336,11 @@ class TestEnvReviewCancellation:
 
         # _step_env_review 应直接返回，不进入阻塞循环
         # 这验证了进程重启后，已确认的部署不会卡住
-        manager._step_env_review(mock_db, deployment_id, deployment)
+        with patch(
+            "app.services.deployer.deployment_manager.read_compose_file",
+            return_value=_COMPOSE_WITH_ENV,
+        ):
+            manager._step_env_review(mock_db, deployment_id, deployment)
 
         # 确认没有创建 review_event（说明跳过了阻塞逻辑）
         assert deployment_id not in manager.review_events

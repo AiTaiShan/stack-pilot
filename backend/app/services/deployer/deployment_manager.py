@@ -6,6 +6,7 @@ import time
 import uuid
 import threading
 import logging
+import yaml
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -25,8 +26,18 @@ from app.services.scanner.git_service import GitService
 from app.services.deployer.docker_service import DockerService
 from app.services.deployer.k8s_service import K8sService
 from app.services.monitoring.monitoring_service import monitoring_service
+from app.services.deployer.services.env_review import read_compose_file
 
 logger = logging.getLogger(__name__)
+
+
+def _get_repo_dir_from_deployment(deployment) -> str:
+    """从部署配置获取仓库目录"""
+    config = deployment.config or {}
+    repo_dir = config.get("_repo_dir", "")
+    if repo_dir and os.path.exists(repo_dir):
+        return repo_dir
+    return ""
 
 
 class DeploymentManager:
@@ -334,13 +345,28 @@ class DeploymentManager:
         deploy_step.step_configure(db, deployment_id, deployment, self._log)
 
     def _step_env_review(self, db: Session, deployment_id: str, deployment: Deployment):
-        """环境变量审核步骤 - 阻塞等待用户确认"""
-        config = dict(deployment.config or {})
-        env_vars = config.get("grouped_env_vars", {})
+        """环境变量审核步骤 - 从 docker-compose.yml 文件读取环境变量"""
+        repo_dir = _get_repo_dir_from_deployment(deployment)
 
-        if not env_vars:
+        try:
+            compose_content = read_compose_file(repo_dir)
+            compose = yaml.safe_load(compose_content)
+        except Exception as e:
+            self._log(db, deployment_id, "warning", f"Failed to read compose file: {e}")
+            return
+
+        # 从文件中提取环境变量
+        services = compose.get("services", {})
+        has_env_vars = any(
+            "environment" in service
+            for service in services.values()
+        )
+
+        if not has_env_vars:
             self._log(db, deployment_id, "info", "No environment variables to review, proceeding...")
             return
+
+        config = dict(deployment.config or {})
 
         # 进程重启恢复：检查用户是否已经确认过（持久化标志）
         if config.get("env_vars_confirmed"):
