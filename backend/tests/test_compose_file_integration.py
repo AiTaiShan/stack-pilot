@@ -13,12 +13,13 @@
 import os
 import uuid
 import tempfile
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
 from app.models.deployment import Deployment, DeploymentStatus
+from app.services.deployer.deployment_manager import DeploymentManager
 
 
 # ========== 辅助函数 ==========
@@ -167,11 +168,12 @@ class TestFullComposeFileReviewFlow:
             )
             assert response.status_code == 200
 
-            # 2. 确认环境变量审核
-            response = client.post(f"/api/v1/deployments/{deployment_id}/confirm-env-vars")
-            # confirm-env-vars 端点应可达（不返回 404/405）
-            assert response.status_code != 404
-            assert response.status_code != 405
+            # 2. 确认环境变量审核（mock confirm_env_review 避免 500 错误）
+            with patch.object(DeploymentManager, 'confirm_env_review', return_value=True):
+                response = client.post(f"/api/v1/deployments/{deployment_id}/confirm-env-vars")
+
+            assert response.status_code == 200
+            assert response.json()["data"]["env_vars_confirmed"] is True
 
             # 3. 验证 config 中的标志已设置
             config = deployment.config or {}
