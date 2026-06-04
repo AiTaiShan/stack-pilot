@@ -35,6 +35,24 @@ const STEPS: StepInfo[] = [
   { key: 'verify', title: '验证部署', description: '检查服务健康状态' },
 ]
 
+const statusColors: Record<string, string> = {
+  running: 'processing',
+  success: 'success',
+  failed: 'error',
+  paused: 'warning',
+  pending: 'default',
+  waiting_review: 'warning',
+}
+
+const statusLabels: Record<string, string> = {
+  running: '执行中',
+  success: '成功',
+  failed: '失败',
+  paused: '已暂停',
+  pending: '等待中',
+  waiting_review: '等待审核',
+}
+
 interface DeploymentProgressProps {
   deploymentId: string
   status: string
@@ -53,7 +71,7 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({
   const [logs, setLogs] = useState<LogEntry[]>([])
 
   useEffect(() => {
-    if (status === 'running' || status === 'paused') {
+    if (status === 'running' || status === 'paused' || status === 'waiting_review') {
       fetchLogs()
       const interval = setInterval(fetchLogs, 3000)
       return () => clearInterval(interval)
@@ -87,6 +105,9 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({
   }
 
   const getStepIcon = (stepKey: string) => {
+    if (stepKey === 'env_review' && status === 'waiting_review') {
+      return <ClockCircleOutlined style={{ color: '#faad14' }} />
+    }
     const stepStatus = getStepStatus(stepKey)
     if (stepStatus === 'finish') return <CheckCircleOutlined style={{ color: '#52c41a' }} />
     if (stepStatus === 'process') return <LoadingOutlined style={{ color: '#1890ff' }} />
@@ -108,20 +129,19 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({
     <>
       <div style={{ marginBottom: 16 }}>
         <Text strong>部署状态: </Text>
-        {status === 'running' && (
-          <Tag icon={<SyncOutlined spin />} color="processing">执行中</Tag>
-        )}
-        {status === 'success' && (
-          <Tag icon={<CheckCircleOutlined />} color="success">成功</Tag>
-        )}
-        {status === 'failed' && (
-          <Tag icon={<CloseCircleOutlined />} color="error">失败</Tag>
-        )}
-        {status === 'paused' && (
-          <Tag color="warning">已暂停</Tag>
-        )}
-        {status === 'pending' && (
-          <Tag color="default">等待中</Tag>
+        {statusColors[status] && statusLabels[status] && (
+          <Tag
+            icon={
+              status === 'running' ? <SyncOutlined spin /> :
+              status === 'success' ? <CheckCircleOutlined /> :
+              status === 'failed' ? <CloseCircleOutlined /> :
+              status === 'waiting_review' ? <ClockCircleOutlined /> :
+              undefined
+            }
+            color={statusColors[status]}
+          >
+            {statusLabels[status]}
+          </Tag>
         )}
       </div>
 
@@ -135,7 +155,13 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({
           description: (
             <div>
               <div>{step.description}</div>
-              {getStepStatus(step.key) === 'process' && (
+              {step.key === 'env_review' && status === 'waiting_review' && (
+                <div style={{ marginTop: 4 }}>
+                  <ClockCircleOutlined style={{ color: '#faad14', marginRight: 4 }} />
+                  <Text type="warning">等待审核环境变量...</Text>
+                </div>
+              )}
+              {getStepStatus(step.key) === 'process' && !(step.key === 'env_review' && status === 'waiting_review') && (
                 <div style={{ marginTop: 4 }}>
                   <Spin size="small" /> <Text type="secondary">执行中...</Text>
                 </div>
@@ -157,7 +183,12 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({
               <Text strong={getStepStatus(step.key) === 'process'}>
                 {step.title}
               </Text>
-              {getStepStatus(step.key) === 'process' && (
+              {step.key === 'env_review' && status === 'waiting_review' && (
+                <Tag color="warning" style={{ marginLeft: 8 }}>
+                  等待审核
+                </Tag>
+              )}
+              {getStepStatus(step.key) === 'process' && !(step.key === 'env_review' && status === 'waiting_review') && (
                 <Tag color="processing" style={{ marginLeft: 8 }}>
                   进行中
                 </Tag>
