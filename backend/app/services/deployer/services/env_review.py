@@ -266,3 +266,24 @@ def delete_compose_service_env_var(repo_dir: str, service_name: str, var_name: s
     with open(compose_path, "w") as f:
         f.write(new_content)
     return True
+
+
+def read_compose_file(repo_dir: str) -> str:
+    """读取 docker-compose.yml 文件内容"""
+    compose_path = os.path.join(repo_dir, "docker-compose.yml")
+    if not os.path.exists(compose_path):
+        raise FileNotFoundError("docker-compose.yml not found")
+    with open(compose_path, "r") as f:
+        return f.read()
+
+
+def write_compose_file(repo_dir: str, content: str) -> bool:
+    """写入 docker-compose.yml 文件内容（含 YAML 验证）"""
+    # 验证 YAML 格式
+    yaml.safe_load(content)
+
+    # 写入文件
+    compose_path = os.path.join(repo_dir, "docker-compose.yml")
+    with open(compose_path, "w") as f:
+        f.write(content)
+    return True
