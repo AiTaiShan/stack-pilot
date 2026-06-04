@@ -104,8 +104,9 @@ const Deployments: React.FC = () => {
           setUserClosedReview(false)
         }
 
-        // 如果部署完成或取消，停止刷新
+        // 如果部署完成或取消，重置审核关闭标记并停止刷新
         if (['success', 'failed', 'cancelled'].includes(updated.status)) {
+          setUserClosedReview(false)
           clearInterval(interval)
         }
       } catch (error) {
