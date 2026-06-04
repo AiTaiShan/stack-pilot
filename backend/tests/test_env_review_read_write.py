@@ -2,6 +2,7 @@
 import pytest
 import os
 import tempfile
+import yaml
 from app.services.deployer.services.env_review import read_compose_file, write_compose_file
 
 
@@ -48,5 +49,9 @@ def test_write_compose_file_invalid_yaml():
 
         invalid_yaml = "version: '3.8'\nservices:\n  app:\n    image: test\n    invalid: ["
 
-        with pytest.raises(Exception):
+        with pytest.raises(yaml.YAMLError):
             write_compose_file(tmpdir, invalid_yaml)
+
+        # 验证原文件内容未被破坏
+        with open(compose_path, "r") as f:
+            assert f.read() == "version: '3.8'\nservices: {}"

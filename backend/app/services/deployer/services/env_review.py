@@ -278,8 +278,19 @@ def read_compose_file(repo_dir: str) -> str:
 
 
 def write_compose_file(repo_dir: str, content: str) -> bool:
-    """写入 docker-compose.yml 文件内容（含 YAML 验证）"""
-    # 验证 YAML 格式
+    """写入 docker-compose.yml 文件内容（含 YAML 验证）。
+
+    Args:
+        repo_dir: 项目仓库目录路径
+        content: 要写入的 docker-compose.yml 内容
+
+    Returns:
+        bool: 写入成功返回 True
+
+    Raises:
+        yaml.YAMLError: 当 content 不是合法的 YAML 格式时抛出
+    """
+    # 仅用于验证 YAML 格式合法性，返回值不需要使用
     yaml.safe_load(content)
 
     # 写入文件
