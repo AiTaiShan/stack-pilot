@@ -4,6 +4,7 @@ import type { ColumnType } from 'antd/es/table/interface'
 import { StopOutlined, RedoOutlined, EyeOutlined } from '@ant-design/icons'
 import client from '../api/client'
 import DeploymentProgress from '../components/DeploymentProgress'
+import EnvVarReviewModal from '../components/EnvVarReviewModal'
 
 const statusColors: Record<string, string> = {
   pending: 'default',
@@ -14,6 +15,7 @@ const statusColors: Record<string, string> = {
   failed: 'error',
   rolling_back: 'warning',
   rolled_back: 'default',
+  waiting_review: 'warning',
 }
 
 const statusLabels: Record<string, string> = {
@@ -25,6 +27,7 @@ const statusLabels: Record<string, string> = {
   failed: '失败',
   rolling_back: '回滚中',
   rolled_back: '已回滚',
+  waiting_review: '待审核',
 }
 
 const formatDate = (dateStr: string) => {
@@ -38,6 +41,9 @@ const Deployments: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [drawerVisible, setDrawerVisible] = useState(false)
   const [selectedDeployment, setSelectedDeployment] = useState<any>(null)
+  const [envReviewOpen, setEnvReviewOpen] = useState(false)
+  const [envReviewDeploymentId, setEnvReviewDeploymentId] = useState<string>('')
+  const [userClosedReview, setUserClosedReview] = useState(false)
 
   const fetchDeployments = async () => {
     setLoading(true)
@@ -75,7 +81,7 @@ const Deployments: React.FC = () => {
   useEffect(() => {
     if (!drawerVisible || !selectedDeployment) return
 
-    const isRunning = selectedDeployment.status === 'running' || selectedDeployment.status === 'paused'
+    const isRunning = selectedDeployment.status === 'running' || selectedDeployment.status === 'paused' || selectedDeployment.status === 'waiting_review'
     if (!isRunning) return
 
     const interval = setInterval(async () => {
@@ -87,6 +93,17 @@ const Deployments: React.FC = () => {
         // 同时刷新部署列表
         fetchDeployments()
 
+        // 发现 waiting_review 时自动打开审核弹窗
+        if (updated.status === 'waiting_review' && !userClosedReview) {
+          setEnvReviewDeploymentId(updated.id)
+          setEnvReviewOpen(true)
+        }
+
+        // 状态变为 running 时重置用户关闭标记
+        if (updated.status === 'running') {
+          setUserClosedReview(false)
+        }
+
         // 如果部署完成或取消，停止刷新
         if (['success', 'failed', 'cancelled'].includes(updated.status)) {
           clearInterval(interval)
@@ -97,7 +114,7 @@ const Deployments: React.FC = () => {
     }, 3000)
 
     return () => clearInterval(interval)
-  }, [drawerVisible, selectedDeployment?.id, selectedDeployment?.status])
+  }, [drawerVisible, selectedDeployment?.id, selectedDeployment?.status, userClosedReview])
 
   const handleCancel = async (deploymentId: string) => {
     try {
@@ -107,6 +124,48 @@ const Deployments: React.FC = () => {
     } catch (error: any) {
       message.error(error.response?.data?.detail || '终止失败')
     }
+  }
+
+  // 全局轮询：检测列表中是否有 waiting_review 状态的部署
+  useEffect(() => {
+    const hasWaitingReview = deployments.some(
+      (d: any) => d.status === 'waiting_review' || d.status === 'running' || d.status === 'paused',
+    )
+    if (!hasWaitingReview) return
+
+    const interval = setInterval(async () => {
+      try {
+        await fetchDeployments()
+      } catch (error) {
+        console.error('轮询部署列表失败:', error)
+      }
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [deployments.length])
+
+  // 检测列表中的 waiting_review 部署并自动弹出审核弹窗
+  useEffect(() => {
+    if (userClosedReview) return
+
+    const waitingDeployment = deployments.find(
+      (d: any) => d.status === 'waiting_review',
+    )
+    if (waitingDeployment) {
+      setEnvReviewDeploymentId(waitingDeployment.id)
+      setEnvReviewOpen(true)
+    }
+  }, [deployments, userClosedReview])
+
+  const handleReviewClose = () => {
+    setEnvReviewOpen(false)
+    setUserClosedReview(true)
+  }
+
+  const handleReviewConfirmed = () => {
+    setEnvReviewOpen(false)
+    setUserClosedReview(false)
+    fetchDeployments()
   }
 
   const handleRedeploy = async (record: any) => {
@@ -185,6 +244,13 @@ const Deployments: React.FC = () => {
           />
         )}
       </Drawer>
+
+      <EnvVarReviewModal
+        deploymentId={envReviewDeploymentId}
+        open={envReviewOpen}
+        onClose={handleReviewClose}
+        onConfirmed={handleReviewConfirmed}
+      />
     </div>
   )
 }
