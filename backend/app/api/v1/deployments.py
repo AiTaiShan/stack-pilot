@@ -1,5 +1,6 @@
 import os
 import uuid
+import yaml
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -271,8 +272,10 @@ async def update_compose_file(
             "message": "success",
             "data": {"saved": success},
         }
-    except Exception as e:
+    except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Invalid YAML format: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save compose file: {str(e)}")
 
 
 @router.delete("/all", response_model=dict)

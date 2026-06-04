@@ -3,6 +3,7 @@
 使用 mock 数据库来避免 SQLite 与 PostgreSQL UUID 类型的兼容性问题。
 """
 import uuid
+import yaml
 import pytest
 from unittest.mock import MagicMock, patch
 from app.models.deployment import Deployment, DeploymentStatus
@@ -138,7 +139,7 @@ class TestUpdateComposeFile:
         )
         _override_db_with_deployment(client, db, deployment)
 
-        with patch("app.api.v1.deployments.write_compose_file", side_effect=Exception("Invalid YAML")):
+        with patch("app.api.v1.deployments.write_compose_file", side_effect=yaml.YAMLError("Invalid YAML syntax")):
             response = client.put(
                 f"/api/v1/deployments/{deployment_id}/compose-file",
                 json={"content": "invalid: yaml: ["},
@@ -146,3 +147,21 @@ class TestUpdateComposeFile:
 
         assert response.status_code == 400
         assert "invalid" in response.json()["detail"].lower()
+
+    def test_put_compose_file_server_error(self, client, db):
+        """保存 compose 文件时非 YAML 异常返回 500"""
+        deployment_id = uuid.uuid4()
+        deployment = _make_mock_deployment(
+            deployment_id=deployment_id,
+            config={"_repo_dir": "/tmp/test"},
+        )
+        _override_db_with_deployment(client, db, deployment)
+
+        with patch("app.api.v1.deployments.write_compose_file", side_effect=IOError("Permission denied")):
+            response = client.put(
+                f"/api/v1/deployments/{deployment_id}/compose-file",
+                json={"content": "version: '3.8'"},
+            )
+
+        assert response.status_code == 500
+        assert "failed to save" in response.json()["detail"].lower()
