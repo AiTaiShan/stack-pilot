@@ -2,16 +2,13 @@ import os
 import uuid
 import yaml
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import Dict
 
 from app.core.database import get_db
 from app.core.error_handler import AppError
 from app.models.deployment import Deployment, DeploymentStatus
 from app.services.deployer.services.env_review import (
-    update_compose_service_env,
-    delete_compose_service_env_var,
     read_compose_file,
     write_compose_file,
 )
@@ -296,89 +293,6 @@ async def delete_all_deployments(db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/{deployment_id}/env-vars", response_model=dict)
-async def get_deployment_env_vars(
-    deployment_id: str,
-    db: Session = Depends(get_db),
-):
-    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
-    if not deployment:
-        raise HTTPException(status_code=404, detail="Deployment not found")
-
-    config = dict(deployment.config or {})
-    grouped_env_vars = config.get("grouped_env_vars", {})
-
-    return {
-        "code": 200,
-        "message": "success",
-        "data": {"grouped_env_vars": grouped_env_vars},
-    }
-
-
-@router.put("/{deployment_id}/env-vars", response_model=dict)
-async def update_deployment_env_vars(
-    deployment_id: str,
-    service_name: str = Query(...),
-    env_vars: Dict[str, str] = Body(...),
-    db: Session = Depends(get_db),
-):
-    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
-    if not deployment:
-        raise HTTPException(status_code=404, detail="Deployment not found")
-
-    if deployment.status != DeploymentStatus.WAITING_REVIEW:
-        raise HTTPException(status_code=400, detail="Deployment not in waiting_review state")
-
-    config = dict(deployment.config or {})
-    grouped = config.get("grouped_env_vars", {})
-    if service_name not in grouped:
-        grouped[service_name] = {"env_vars": {}}
-
-    for key, value in env_vars.items():
-        grouped[service_name]["env_vars"][key] = {"value": value, "source": "user"}
-
-    repo_dir = _get_repo_dir(deployment)
-    success = update_compose_service_env(repo_dir, service_name, grouped[service_name]["env_vars"])
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to update docker-compose.yml")
-
-    config["grouped_env_vars"] = grouped
-    deployment.config = config
-    db.commit()
-
-    return {"code": 200, "message": "success", "data": {"updated": list(env_vars.keys())}}
-
-
-@router.delete("/{deployment_id}/env-vars/{service_name}/{var_name}", response_model=dict)
-async def delete_deployment_env_var(
-    deployment_id: str,
-    service_name: str,
-    var_name: str,
-    db: Session = Depends(get_db),
-):
-    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
-    if not deployment:
-        raise HTTPException(status_code=404, detail="Deployment not found")
-
-    if deployment.status != DeploymentStatus.WAITING_REVIEW:
-        raise HTTPException(status_code=400, detail="Deployment not in waiting_review state")
-
-    repo_dir = _get_repo_dir(deployment)
-    success = delete_compose_service_env_var(repo_dir, service_name, var_name)
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to delete env var from docker-compose.yml")
-
-    config = dict(deployment.config or {})
-    grouped = config.get("grouped_env_vars", {})
-    if service_name in grouped and var_name in grouped[service_name].get("env_vars", {}):
-        del grouped[service_name]["env_vars"][var_name]
-        config["grouped_env_vars"] = grouped
-        deployment.config = config
-        db.commit()
-
-    return {"code": 200, "message": "success", "data": {"deleted": var_name}}
 
 
 @router.post("/{deployment_id}/confirm-env-vars", response_model=dict)

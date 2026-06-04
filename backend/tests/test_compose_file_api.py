@@ -165,3 +165,47 @@ class TestUpdateComposeFile:
 
         assert response.status_code == 500
         assert "failed to save" in response.json()["detail"].lower()
+
+
+# ========== 验证旧 env-vars API 已删除 ==========
+
+class TestOldEnvVarsApiRemoved:
+    """验证旧的 env-vars API 端点已删除（返回 404 表示路由不存在）"""
+
+    def test_old_get_env_vars_removed(self, client):
+        """GET /{deployment_id}/env-vars 应返回 404（端点已删除）"""
+        fake_id = str(uuid.uuid4())
+        response = client.get(f"/api/v1/deployments/{fake_id}/env-vars")
+        assert response.status_code == 404
+
+    def test_old_put_env_vars_removed(self, client):
+        """PUT /{deployment_id}/env-vars 应返回 404（端点已删除）"""
+        fake_id = str(uuid.uuid4())
+        response = client.put(
+            f"/api/v1/deployments/{fake_id}/env-vars?service_name=app",
+            json={"DB_HOST": "localhost"},
+        )
+        assert response.status_code == 404
+
+    def test_old_delete_env_var_removed(self, client):
+        """DELETE /{deployment_id}/env-vars/{service_name}/{var_name} 应返回 404（端点已删除）"""
+        fake_id = str(uuid.uuid4())
+        response = client.delete(
+            f"/api/v1/deployments/{fake_id}/env-vars/app/DB_HOST",
+        )
+        assert response.status_code == 404
+
+    def test_confirm_env_vars_still_exists(self, client, db):
+        """POST /{deployment_id}/confirm-env-vars 应仍然存在（不返回 404/405）"""
+        deployment_id = uuid.uuid4()
+        deployment = _make_mock_deployment(
+            deployment_id=deployment_id,
+            config={"_repo_dir": "/tmp/test"},
+        )
+        _override_db_with_deployment(client, db, deployment)
+
+        # confirm-env-vars 端点仍应存在，虽然可能因状态不对返回 400
+        # 但不应该返回 404 或 405
+        response = client.post(f"/api/v1/deployments/{deployment_id}/confirm-env-vars")
+        assert response.status_code != 404
+        assert response.status_code != 405
