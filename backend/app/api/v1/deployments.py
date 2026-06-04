@@ -1,11 +1,17 @@
+import os
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from typing import Dict
 
 from app.core.database import get_db
 from app.core.error_handler import AppError
 from app.models.deployment import Deployment, DeploymentStatus
+from app.services.deployer.services.env_review import (
+    update_compose_service_env,
+    delete_compose_service_env_var,
+)
 import logging
 
 from app.schemas.deployment import (
@@ -14,7 +20,6 @@ from app.schemas.deployment import (
     DeploymentStatusResponse,
     DeploymentLogResponse,
     DeploymentLogEntry,
-    EnvVarKeysDelete,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,6 +30,23 @@ router = APIRouter(prefix="/deployments", tags=["部署"])
 
 def get_deployment_manager(db: Session = Depends(get_db)) -> DeploymentManager:
     return DeploymentManager(db)
+
+
+def _get_repo_dir(deployment) -> str:
+    """获取部署对应的仓库目录"""
+    # 从 config 中获取 _repo_dir（clone_step 会保存到 config）
+    config = deployment.config or {}
+    repo_dir = config.get('_repo_dir', '')
+    if repo_dir and os.path.exists(repo_dir):
+        return repo_dir
+
+    # 回退：从 git_url 推断临时目录路径
+    from app.services.scanner.git_service import GitService
+    git_service = GitService()
+    return os.path.join(
+        git_service.temp_dir,
+        deployment.git_url.rstrip("/").split("/")[-1].replace(".git", "").lower()
+    )
 
 
 @router.get("/", response_model=dict)
@@ -229,89 +251,78 @@ async def get_deployment_env_vars(
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
-    config = deployment.config or {}
-    pending_env_vars = config.get("pending_env_vars", {})
-    confirmed = config.get("env_vars_confirmed", False)
+    config = dict(deployment.config or {})
+    grouped_env_vars = config.get("grouped_env_vars", {})
 
     return {
         "code": 200,
         "message": "success",
-        "data": {
-            "pending_env_vars": pending_env_vars,
-            "confirmed": confirmed,
-            "deployment_status": deployment.status.value if deployment.status else None,
-        },
+        "data": {"grouped_env_vars": grouped_env_vars},
     }
 
 
 @router.put("/{deployment_id}/env-vars", response_model=dict)
 async def update_deployment_env_vars(
     deployment_id: str,
-    env_vars: dict,
+    service_name: str = Query(...),
+    env_vars: Dict[str, str] = Body(...),
     db: Session = Depends(get_db),
 ):
     deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
+    if deployment.status != DeploymentStatus.WAITING_REVIEW:
+        raise HTTPException(status_code=400, detail="Deployment not in waiting_review state")
+
     config = dict(deployment.config or {})
-    pending = config.get("pending_env_vars", {})
+    grouped = config.get("grouped_env_vars", {})
+    if service_name not in grouped:
+        grouped[service_name] = {"env_vars": {}}
 
-    if not isinstance(env_vars, dict):
-        raise HTTPException(status_code=400, detail="env_vars must be a JSON object")
+    for key, value in env_vars.items():
+        grouped[service_name]["env_vars"][key] = {"value": value, "source": "user"}
 
-    for k, v in env_vars.items():
-        if not isinstance(k, str) or not isinstance(v, str):
-            raise HTTPException(status_code=400, detail="keys and values must be strings")
+    repo_dir = _get_repo_dir(deployment)
+    success = update_compose_service_env(repo_dir, service_name, grouped[service_name]["env_vars"])
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update docker-compose.yml")
 
-    pending.update(env_vars)
-    config["pending_env_vars"] = pending
+    config["grouped_env_vars"] = grouped
     deployment.config = config
     db.commit()
 
-    return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "pending_env_vars": pending,
-            "total": len(pending),
-        },
-    }
+    return {"code": 200, "message": "success", "data": {"updated": list(env_vars.keys())}}
 
 
-@router.delete("/{deployment_id}/env-vars", response_model=dict)
-async def delete_deployment_env_vars(
+@router.delete("/{deployment_id}/env-vars/{service_name}/{var_name}", response_model=dict)
+async def delete_deployment_env_var(
     deployment_id: str,
-    body: EnvVarKeysDelete,
+    service_name: str,
+    var_name: str,
     db: Session = Depends(get_db),
 ):
     deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
-    keys = body.keys
+    if deployment.status != DeploymentStatus.WAITING_REVIEW:
+        raise HTTPException(status_code=400, detail="Deployment not in waiting_review state")
+
+    repo_dir = _get_repo_dir(deployment)
+    success = delete_compose_service_env_var(repo_dir, service_name, var_name)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete env var from docker-compose.yml")
 
     config = dict(deployment.config or {})
-    pending = config.get("pending_env_vars", {})
+    grouped = config.get("grouped_env_vars", {})
+    if service_name in grouped and var_name in grouped[service_name].get("env_vars", {}):
+        del grouped[service_name]["env_vars"][var_name]
+        config["grouped_env_vars"] = grouped
+        deployment.config = config
+        db.commit()
 
-    removed = []
-    for key in keys:
-        if key in pending:
-            del pending[key]
-            removed.append(key)
-
-    config["pending_env_vars"] = pending
-    deployment.config = config
-    db.commit()
-
-    return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "removed": removed,
-            "remaining": pending,
-        },
-    }
+    return {"code": 200, "message": "success", "data": {"deleted": var_name}}
 
 
 @router.post("/{deployment_id}/confirm-env-vars", response_model=dict)
@@ -324,34 +335,20 @@ async def confirm_deployment_env_vars(
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
-    if deployment.status != DeploymentStatus.PAUSED:
-        raise HTTPException(status_code=400, detail="Deployment not in paused state")
+    if deployment.status != DeploymentStatus.WAITING_REVIEW:
+        raise HTTPException(status_code=400, detail="Deployment not in waiting_review state")
 
     config = dict(deployment.config or {})
-    pending_env_vars = config.get("pending_env_vars", {})
-
-    if not pending_env_vars:
-        raise HTTPException(status_code=400, detail="No pending env vars to confirm")
-
     config["env_vars_confirmed"] = True
     deployment.config = config
     db.commit()
 
-    try:
-        manager._apply_confirmed_env_vars_to_compose(deployment_id)
-    except Exception as e:
-        logger.warning(f"应用环境变量到 compose 文件失败: {e}")
-
-    success = manager.resume_deployment(deployment_id)
+    success = manager.confirm_env_review(deployment_id)
     if not success:
-        raise HTTPException(status_code=500, detail="Failed to resume deployment")
+        raise HTTPException(status_code=500, detail="Failed to confirm env review")
 
     return {
         "code": 200,
         "message": "success",
-        "data": {
-            "env_vars_confirmed": True,
-            "total_env_vars": len(pending_env_vars),
-            "resumed": True,
-        },
+        "data": {"env_vars_confirmed": True},
     }
