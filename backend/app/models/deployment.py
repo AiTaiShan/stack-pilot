@@ -18,6 +18,7 @@ class DeploymentStatus(str, enum.Enum):
     FAILED = "failed"
     ROLLING_BACK = "rolling_back"
     ROLLED_BACK = "rolled_back"
+    WAITING_REVIEW = "waiting_review"
 
 
 class DeploymentStep(str, enum.Enum):

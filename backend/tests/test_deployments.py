@@ -36,7 +36,8 @@ def test_deployment_status_enum():
     assert DeploymentStatus.FAILED.value == "failed"
     assert DeploymentStatus.ROLLING_BACK.value == "rolling_back"
     assert DeploymentStatus.ROLLED_BACK.value == "rolled_back"
-    assert len(DeploymentStatus) == 8
+    assert DeploymentStatus.WAITING_REVIEW.value == "waiting_review"
+    assert len(DeploymentStatus) == 9
 
 
 def test_deployment_step_enum():
