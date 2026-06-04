@@ -61,7 +61,15 @@ EXTERNAL_SERVICES: Dict[str, ExternalService] = {
     "solr": ExternalService("solr", "search", "solr:9-alpine", 8983),
 
     # 服务发现/配置中心
-    "nacos": ExternalService("nacos", "registry", "nacos/nacos-server:v2.2.3", 8848, {"MODE": "standalone"}),
+    "nacos": ExternalService("nacos", "registry", "nacos/nacos-server:v2.2.3", 8848, {
+        "MODE": "standalone",
+        "SPRING_DATASOURCE_PLATFORM": "mysql",
+        "MYSQL_SERVICE_HOST": "mysql",
+        "MYSQL_SERVICE_PORT": "3306",
+        "MYSQL_SERVICE_DB_NAME": "ry-config",
+        "MYSQL_SERVICE_USER": "root",
+        "MYSQL_SERVICE_PASSWORD": "root",
+    }),
     "consul": ExternalService("consul", "registry", "consul:1.15", 8500),
     "etcd": ExternalService("etcd", "registry", "quay.io/coreos/etcd:v3.5.9", 2379),
     "zookeeper": ExternalService("zookeeper", "registry", "zookeeper:3.8", 2181),
