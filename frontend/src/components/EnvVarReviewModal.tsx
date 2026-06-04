@@ -81,7 +81,13 @@ const EnvVarReviewModal: React.FC<Props> = ({
           <Button onClick={onClose}>关闭</Button>
           <Button
             icon={<EditOutlined />}
-            onClick={() => setEditing(!editing)}
+            onClick={() => {
+              if (editing) {
+                // 取消编辑时重新获取原始内容
+                fetchContent()
+              }
+              setEditing(!editing)
+            }}
           >
             {editing ? '取消编辑' : '编辑'}
           </Button>
@@ -99,6 +105,7 @@ const EnvVarReviewModal: React.FC<Props> = ({
             icon={<CheckCircleOutlined />}
             onClick={handleConfirm}
             loading={confirming}
+            disabled={editing}
           >
             确认并继续部署
           </Button>
