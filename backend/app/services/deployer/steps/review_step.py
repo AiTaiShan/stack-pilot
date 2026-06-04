@@ -7,6 +7,8 @@ from typing import Dict, Any, Optional
 
 from sqlalchemy.orm import Session
 from app.models.deployment import Deployment
+from app.services.deployer.services.env_review import read_compose_service_env
+from app.services.scanner.dependency_detector import EXTERNAL_SERVICES
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +112,11 @@ def execute(db: Session, deployment_id: str, deployment: Deployment,
     pending = _generate_service_env_vars(repo_dir, "spring")
     if not pending:
         pending = _generate_service_env_vars(repo_dir, "generic")
+    grouped = _group_env_vars_by_service(repo_dir, pending, deps)
     logger.info("_step_generate_review_END: deployment.config_keys=%s", list((deployment.config or {}).keys()))
     dc = dict(deployment.config or {})
     dc["pending_env_vars"] = pending
+    dc["grouped_env_vars"] = grouped
     deployment.config = dc
     db.commit()
     if pending:
@@ -499,6 +503,26 @@ def _adapt_config_for_docker(repo_dir: str, deps: dict):
 
     if adapted_files:
         logger.info("Adapted config files for Docker: %s", adapted_files)
+
+
+def _group_env_vars_by_service(repo_dir: str, pending: list, deps: dict) -> dict:
+    """将环境变量按 docker-compose 服务分组"""
+    grouped = {"app": {"env_vars": {}}}
+
+    for var in pending:
+        grouped["app"]["env_vars"][var["name"]] = {
+            "value": "",
+            "source": f"{var['file']}:{var['line']}",
+        }
+
+    external_services = deps.get("external_services", [])
+    for service_name in external_services:
+        if service_name in EXTERNAL_SERVICES:
+            grouped[service_name] = {"env_vars": {}}
+            compose_env = read_compose_service_env(repo_dir, service_name)
+            grouped[service_name]["env_vars"].update(compose_env)
+
+    return grouped
 
 
 def _generate_service_env_vars(repo_dir: str, style: str) -> list:
