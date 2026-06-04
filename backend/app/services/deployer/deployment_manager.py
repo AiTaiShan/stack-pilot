@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import time
 import uuid
 import threading
 import logging
@@ -57,6 +58,7 @@ class DeploymentManager:
     _active_deployments: Dict[str, threading.Thread] = {}
     _cancel_flags: Dict[str, threading.Event] = {}
     _pause_flags: Dict[str, threading.Event] = {}
+    _review_events: Dict[str, threading.Event] = {}
 
     def __init__(self, db: Session):
         self.db = db
@@ -78,6 +80,17 @@ class DeploymentManager:
 
     def pause_flags(self) -> Dict[str, threading.Event]:
         return DeploymentManager._pause_flags
+
+    @property
+    def review_events(self) -> Dict[str, threading.Event]:
+        return DeploymentManager._review_events
+
+    def confirm_env_review(self, deployment_id: str) -> bool:
+        """用户确认环境变量审核，解除阻塞"""
+        if deployment_id not in self.review_events:
+            return False
+        self.review_events[deployment_id].set()
+        return True
 
 
     def start_deployment(
@@ -263,6 +276,7 @@ class DeploymentManager:
             self.active_deployments.pop(deployment_id, None)
             self.cancel_flags.pop(deployment_id, None)
             self.pause_flags.pop(deployment_id, None)
+            self.review_events.pop(deployment_id, None)
 
 
     def _execute_step(self, db: Session, deployment_id: str, step: str, deployment: Deployment):
@@ -320,27 +334,57 @@ class DeploymentManager:
         deploy_step.step_configure(db, deployment_id, deployment, self._log)
 
     def _step_env_review(self, db: Session, deployment_id: str, deployment: Deployment):
-        """环境变量审核步骤 - 自动暂停等待用户确认"""
+        """环境变量审核步骤 - 阻塞等待用户确认"""
         config = dict(deployment.config or {})
-        env_vars = config.get("pending_env_vars", {})
+        env_vars = config.get("grouped_env_vars", {})
 
         if not env_vars:
             self._log(db, deployment_id, "info", "No environment variables to review, proceeding...")
             return
 
-        self._log(db, deployment_id, "info",
-                  f"Generated {len(env_vars)} environment variables for review")
-        self._log(db, deployment_id, "info",
-                  "Deployment paused for environment variable review. "
-                  "Use GET /api/v1/deployments/{id}/env-vars to review, "
-                  "PUT /api/v1/deployments/{id}/env-vars to modify, "
-                  "and POST /api/v1/deployments/{id}/confirm-env-vars to confirm and proceed.")
+        deployment.status = DeploymentStatus.WAITING_REVIEW
+        db.commit()
 
-        # 设置暂停标志 - 下一轮循环将自动暂停
-        if deployment_id in self.pause_flags:
-            self.pause_flags[deployment_id].set()
+        self._log(db, deployment_id, "info",
+                  f"Waiting for user to review environment variables")
 
-        self._log(db, deployment_id, "info", "Pause flag set, will pause before next step")
+        review_event = threading.Event()
+        self.review_events[deployment_id] = review_event
+
+        timeout = int(os.getenv("ENV_REVIEW_TIMEOUT", "1800"))
+        start_time = time.time()
+
+        while not review_event.is_set():
+            # 检查取消标志
+            if self.cancel_flags.get(deployment_id) and self.cancel_flags[deployment_id].is_set():
+                self.review_events.pop(deployment_id, None)
+                raise AppError(
+                    code=ErrorCode.DEPLOYMENT_CANCELLED,
+                    message="Deployment cancelled during env review",
+                    severity=ErrorSeverity.MEDIUM,
+                )
+
+            # 检查超时
+            elapsed = time.time() - start_time
+            if elapsed >= timeout:
+                self.review_events.pop(deployment_id, None)
+                deployment.status = DeploymentStatus.FAILED
+                deployment.error_message = "环境变量审核超时，部署自动取消"
+                db.commit()
+                raise AppError(
+                    code=ErrorCode.DEPLOYMENT_TIMEOUT,
+                    message="Environment variable review timeout",
+                    severity=ErrorSeverity.MEDIUM,
+                )
+
+            review_event.wait(timeout=1.0)
+
+        self.review_events.pop(deployment_id, None)
+
+        deployment.status = DeploymentStatus.RUNNING
+        db.commit()
+
+        self._log(db, deployment_id, "info", "Environment variables confirmed, continuing deployment")
 
 
     def get_deployment_status(self, deployment_id: str) -> Optional[Dict[str, Any]]:
