@@ -1,6 +1,6 @@
 use axum::Router;
 use axum::http::HeaderMap;
-use axum::routing::{get, put, delete};
+use axum::routing::{get, put};
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::Deserialize;

@@ -1,4 +1,5 @@
-pub fn generate_php_dockerfile(framework: &str, version: &str, port: u16) -> String {
+#![allow(dead_code)]
+pub fn generate_php_dockerfile(_framework: &str, version: &str, port: u16) -> String {
     format!(r#"FROM php:{}-apache
 WORKDIR /var/www/html
 COPY . .

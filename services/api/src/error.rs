@@ -20,24 +20,30 @@ pub enum AppError {
     DatabaseError(String),
 
     #[error("Git 操作失败: {message}")]
+    #[allow(dead_code)]
     GitError { code: String, message: String },
 
     #[error("Docker 操作失败: {message}")]
     DockerError { code: String, message: String },
 
     #[error("K8s 操作失败: {message}")]
+    #[allow(dead_code)]
     K8sError { code: String, message: String },
 
     #[error("Agent 服务调用失败: {0}")]
+    #[allow(dead_code)]
     AgentError(String),
 
     #[error("网络错误: {0}")]
+    #[allow(dead_code)]
     NetworkError(String),
 
     #[error("LLM 调用失败: {0}")]
+    #[allow(dead_code)]
     LLMError(String),
 
     #[error("请求过于频繁")]
+    #[allow(dead_code)]
     RateLimitError,
 
     #[error("部署已取消")]

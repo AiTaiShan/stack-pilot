@@ -43,7 +43,7 @@ impl MemberService {
             role: Set(role.to_string()),
             invited_by: Set(None),
             created_at: Set(Some(chrono::Utc::now().naive_utc())),
-            updated_at: Set(Some(chrono::Utc::now().naive_utc())),,
+            updated_at: Set(Some(chrono::Utc::now().naive_utc())),
         };
 
         let result = member

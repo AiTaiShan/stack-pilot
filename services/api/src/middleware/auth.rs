@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use axum::extract::{Request, State};
 use axum::http::header::AUTHORIZATION;
 use axum::middleware::Next;

@@ -1,10 +1,11 @@
+#![allow(dead_code)]
 use std::path::PathBuf;
 use tracing::info;
 use crate::error::AppError;
 use crate::services::scanner::dependency::ExternalService;
 
 pub fn generate_single_compose(
-    repo_name: &str,
+    _repo_name: &str,
     image_tag: &str,
     services: &[ExternalService],
 ) -> String {

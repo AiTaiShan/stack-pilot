@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use uuid::Uuid;
 use tracing::info;
 use serde::Serialize;

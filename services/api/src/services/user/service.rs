@@ -183,7 +183,7 @@ impl UserService {
     pub async fn update_password(
         &self,
         id: &str,
-        old_password: &str,
+        _old_password: &str,
         new_password: &str,
     ) -> Result<(), AppError> {
         let uuid = Uuid::parse_str(id)

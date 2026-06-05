@@ -73,3 +73,6 @@ docs/superpowers
 openspec
 .sds
 .pytest_cache
+
+# Rust build artifacts
+target/

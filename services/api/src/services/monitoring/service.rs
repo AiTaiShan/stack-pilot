@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use sysinfo::System;
 use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
 use crate::error::AppError;

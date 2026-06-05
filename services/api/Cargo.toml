@@ -17,7 +17,7 @@ sea-orm = { version = "0.12", features = ["runtime-tokio-native-tls", "sqlx-post
 
 # 数据库迁移
 migration = { path = "../../migration" }
-sea-orm-migration = "0.12"
+sea-orm-migration = { version = "0.12", default-features = false }
 
 # 序列化
 serde = { version = "1", features = ["derive"] }
@@ -60,3 +60,4 @@ sysinfo = "0.30"
 tokio-test = "0.4"
 reqwest = { version = "0.11", features = ["json"] }
 tempfile = "3"
+

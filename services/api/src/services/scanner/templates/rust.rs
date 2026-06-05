@@ -1,4 +1,5 @@
-pub fn generate_rust_dockerfile(framework: &str, version: &str, port: u16) -> String {
+#![allow(dead_code)]
+pub fn generate_rust_dockerfile(_framework: &str, version: &str, port: u16) -> String {
     format!(r#"FROM rust:{} AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./

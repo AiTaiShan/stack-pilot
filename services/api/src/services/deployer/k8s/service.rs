@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use tracing::info;
 use crate::error::AppError;
 use super::deployment::K8sService;

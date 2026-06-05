@@ -1,4 +1,5 @@
-pub fn generate_java_dockerfile(framework: &str, version: &str, port: u16) -> String {
+#![allow(dead_code)]
+pub fn generate_java_dockerfile(_framework: &str, version: &str, port: u16) -> String {
     format!(r#"FROM maven:3.9-eclipse-temurin-{} AS builder
 WORKDIR /app
 COPY pom.xml .

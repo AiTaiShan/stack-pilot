@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub fn generate_node_dockerfile(framework: &str, version: &str, port: u16) -> String {
     let base_image = format!("node:{}", version);
 

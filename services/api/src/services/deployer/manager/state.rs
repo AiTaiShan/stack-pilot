@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, watch};
@@ -6,7 +7,7 @@ use sea_orm::{EntityTrait, ActiveModelTrait, Set, ColumnTrait, QueryFilter};
 use tracing::{info, warn, error};
 
 use crate::error::AppError;
-use crate::models::deployment::{self, Entity as DeploymentEntity, ActiveModel as DeploymentActiveModel};
+use crate::models::deployment::{self, Entity as DeploymentEntity, ActiveModel as DeploymentActiveModel, DeploymentStatus};
 
 pub struct DeploymentRuntime {
     pub cancel_tx: watch::Sender<bool>,

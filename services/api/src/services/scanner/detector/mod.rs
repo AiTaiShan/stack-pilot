@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::path::PathBuf;
 use crate::error::AppError;
 use super::rules::context::ProjectContext;

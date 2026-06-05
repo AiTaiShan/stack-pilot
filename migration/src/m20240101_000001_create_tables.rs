@@ -205,13 +205,13 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Deployments::UserId).uuid().null())
                     .col(
                         ColumnDef::new(Deployments::Status)
-                            .custom(DeploymentStatus)
+                            .custom(DeploymentStatus::Enum)
                             .not_null()
                             .default(Expr::cust("'pending'::deploymentstatus")),
                     )
                     .col(
                         ColumnDef::new(Deployments::CurrentStep)
-                            .custom(DeploymentStep)
+                            .custom(DeploymentStep::Enum)
                             .null(),
                     )
                     .col(
@@ -448,6 +448,7 @@ impl MigrationTrait for Migration {
 // ── PG 枚举类型标识 ──────────────────────────────────
 
 #[derive(Iden)]
+#[allow(dead_code)]
 enum DeploymentStatus {
     #[iden = "deploymentstatus"]
     Enum,
@@ -463,6 +464,7 @@ enum DeploymentStatus {
 }
 
 #[derive(Iden)]
+#[allow(dead_code)]
 enum DeploymentStep {
     #[iden = "deploymentstep"]
     Enum,

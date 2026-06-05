@@ -1,3 +1,3 @@
 pub mod service;
 
-pub use service::{UserService, UserInfo};
+pub use service::UserService;

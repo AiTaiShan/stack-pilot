@@ -1,4 +1,5 @@
-pub fn generate_go_dockerfile(framework: &str, version: &str, port: u16) -> String {
+#![allow(dead_code)]
+pub fn generate_go_dockerfile(_framework: &str, version: &str, port: u16) -> String {
     format!(r#"FROM golang:{}-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./

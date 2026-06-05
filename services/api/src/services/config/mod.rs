@@ -1,2 +1,2 @@
 pub mod service;
-pub use service::{ConfigService, ConfigItem};
+pub use service::ConfigService;
