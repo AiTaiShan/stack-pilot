@@ -93,6 +93,8 @@
 - [Rust 1.96+](https://rustup.rs/)（`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`）
 - Python 3.10+（需安装 `python3-venv`：`sudo apt install python3-venv`）
 - [pnpm](https://pnpm.io/)
+- 系统依赖：`sudo apt install pkg-config libssl-dev`
+- 开发工具（可选）：`cargo install cargo-watch`（Rust 热加载）
 
 ### 一键初始化（推荐）
 
