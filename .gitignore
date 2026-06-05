@@ -72,3 +72,4 @@ docs/superpowers
 .vite
 openspec
 .sds
+.pytest_cache

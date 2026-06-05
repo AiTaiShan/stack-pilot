@@ -1,56 +1,58 @@
+version: '3.8'
+
 services:
+  # Rust 主服务
   backend:
-    build: ./backend
+    build:
+      context: ./backend-rs
+      dockerfile: Dockerfile
     ports:
       - "9099:9099"
-    env_file:
-      - .env
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/stackpilot
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-here}
+      - AGENT_SERVICE_URL=http://agent:9091
+      - SERVER_PORT=9099
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
+      - db
+      - redis
+      - agent
+    restart: unless-stopped
 
-  frontend:
-    build: ./frontend
+  # Python Agent 审核服务
+  agent:
+    build:
+      context: ./agent-service
+      dockerfile: Dockerfile
     ports:
-      - "5174:5174"
-    env_file:
-      - .env
-    depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - "9091:9091"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-dashscope}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+    restart: unless-stopped
 
+  # PostgreSQL 数据库
   db:
     image: postgres:15
-    env_file:
-      - .env
     ports:
       - "15432:5432"
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=stackpilot
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    restart: unless-stopped
 
+  # Redis 缓存
   redis:
     image: redis:7-alpine
     ports:
       - "16379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    restart: unless-stopped
 
 volumes:
   postgres_data:
-  redis_data:

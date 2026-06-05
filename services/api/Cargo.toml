@@ -1,0 +1,58 @@
+[package]
+name = "stackpilot-backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web 框架
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# 数据库
+sea-orm = { version = "0.12", features = ["runtime-tokio-native-tls", "sqlx-postgres"] }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 配置
+dotenvy = "0.15"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# JWT
+jsonwebtoken = "9"
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP 客户端
+reqwest = { version = "0.11", features = ["json"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# 错误处理
+thiserror = "1"
+anyhow = "1"
+
+# 异步 trait
+async-trait = "0.1"
+
+# 速率限制
+governor = "0.6"
+
+# 密码哈希
+bcrypt = "0.15"
+
+# 系统信息
+sysinfo = "0.30"
+
+[dev-dependencies]
+tokio-test = "0.4"
+reqwest = { version = "0.11", features = ["json"] }
+tempfile = "3"

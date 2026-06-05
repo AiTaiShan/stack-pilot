@@ -1,1 +1,0 @@
-# StackPilot Backend Application
