@@ -11,6 +11,9 @@ if [ ! -f .env ]; then
     echo "警告: .env 文件不存在，使用默认配置"
 fi
 
+# 加载 Rust 环境（如果已安装）
+[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+
 # ── Agent 服务 ──────────────────────────────────────
 AGENT_VENV="services/agent/.venv"
 
@@ -31,6 +34,14 @@ AGENT_PID=$!
 sleep 3
 
 # ── Rust 主服务 ─────────────────────────────────────
+if ! command -v cargo &> /dev/null; then
+    echo "错误: 未找到 cargo（Rust 工具链）"
+    echo "请安装 Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+    echo "安装后执行: source ~/.cargo/env"
+    kill $AGENT_PID 2>/dev/null
+    exit 1
+fi
+
 echo "启动 Rust 主服务..."
 cd services/api
 cargo run &

@@ -90,9 +90,9 @@
 ### 前置条件
 
 - Docker & Docker Compose
-- Rust 1.96+
-- Python 3.10+
-- pnpm
+- [Rust 1.96+](https://rustup.rs/)（`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`）
+- Python 3.10+（需安装 `python3-venv`：`sudo apt install python3-venv`）
+- [pnpm](https://pnpm.io/)
 
 ### 一键初始化（推荐）
 
@@ -133,21 +133,19 @@ cp .env.example .env
 # 2. 启动数据库和 Redis
 docker-compose up -d db redis
 
-# 3. 数据库迁移
+# 3. 数据库迁移（也可跳过，Rust 服务启动时会自动迁移）
 ./scripts/migrate.sh
-# 或手动执行：
-# cd migration && DATABASE_URL=postgresql://user:password@localhost:15432/stackpilot cargo run -- up
 
-# 4. 启动 Agent 服务
-cd services/agent
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-uvicorn src.main:app --host 0.0.0.0 --port 9091
+# 4. 启动 Agent 服务（首次需要创建虚拟环境）
+python3 -m venv services/agent/.venv
+services/agent/.venv/bin/pip install -r services/agent/requirements.txt
+services/agent/.venv/bin/uvicorn --app-dir services/agent src.main:app --host 0.0.0.0 --port 9091
 
-# 5. 启动 Rust 主服务（自动执行迁移）
+# 5. 启动 Rust 主服务（另一个终端）
 cd services/api
 cargo run
 
-# 6. 启动前端
+# 6. 启动前端（另一个终端）
 cd frontend
 pnpm install && pnpm dev
 ```
