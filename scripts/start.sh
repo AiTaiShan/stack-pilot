@@ -12,7 +12,7 @@ if [ ! -f .env ]; then
 fi
 
 # 加载 Rust 环境（如果已安装）
-[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$PATH"
 
 # ── Agent 服务 ──────────────────────────────────────
 AGENT_VENV="services/agent/.venv"
@@ -26,7 +26,7 @@ fi
 "$AGENT_VENV/bin/pip" install -r services/agent/requirements.txt \
     -i https://pypi.tuna.tsinghua.edu.cn/simple -q
 
-"$AGENT_VENV/bin/uvicorn" --app-dir services/agent src.main:app \
+"$AGENT_VENV/bin/uvicorn" --app-dir services/agent src.main:app --reload --reload-dir services/agent \
     --host 0.0.0.0 --port 9091 &
 AGENT_PID=$!
 
@@ -44,7 +44,11 @@ fi
 
 echo "启动 Rust 主服务..."
 cd services/api
-cargo run &
+if command -v cargo-watch &>/dev/null; then
+    cargo watch -x run &
+else
+    cargo run &
+fi
 BACKEND_PID=$!
 cd ../..
 
