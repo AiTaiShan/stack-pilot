@@ -11,18 +11,26 @@ if [ ! -f .env ]; then
     echo "警告: .env 文件不存在，使用默认配置"
 fi
 
-# 启动 Agent 服务
+# ── Agent 服务 ──────────────────────────────────────
+AGENT_VENV="services/agent/.venv"
+
 echo "启动 Agent 服务..."
-cd services/agent
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-uvicorn src.main:app --host 0.0.0.0 --port 9091 &
+if [ ! -d "$AGENT_VENV" ]; then
+    echo "  创建 Python 虚拟环境..."
+    python3 -m venv "$AGENT_VENV"
+fi
+
+"$AGENT_VENV/bin/pip" install -r services/agent/requirements.txt \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple -q
+
+"$AGENT_VENV/bin/uvicorn" --app-dir services/agent src.main:app \
+    --host 0.0.0.0 --port 9091 &
 AGENT_PID=$!
-cd ../..
 
 # 等待 Agent 服务启动
 sleep 3
 
-# 启动 Rust 主服务
+# ── Rust 主服务 ─────────────────────────────────────
 echo "启动 Rust 主服务..."
 cd services/api
 cargo run &

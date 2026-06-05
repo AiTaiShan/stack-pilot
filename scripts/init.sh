@@ -19,7 +19,7 @@ check_cmd() {
         echo -e "${RED}✗ 未找到 $1，请先安装${NC}"
         exit 1
     fi
-    echo -e "${GREEN}  ✓ $1$(command -v $1)${NC}"
+    echo -e "${GREEN}  ✓ $1 ($(command -v $1))${NC}"
 }
 
 check_cmd docker
@@ -60,7 +60,6 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# 确认 Redis
 if docker-compose exec -T redis redis-cli ping > /dev/null 2>&1; then
     echo -e "${GREEN}  ✓ Redis 就绪${NC}"
 else
@@ -84,11 +83,12 @@ echo ""
 # ── 5. 安装依赖 ─────────────────────────────────────
 echo -e "${YELLOW}[5/5] 安装依赖...${NC}"
 
-# Python Agent 依赖
+# Python Agent 依赖（使用虚拟环境）
+echo -e "  创建 Agent Python 虚拟环境..."
+python3 -m venv services/agent/.venv
 echo -e "  安装 Agent 依赖..."
-cd services/agent
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple -q 2>&1 | tail -1
-cd ../..
+services/agent/.venv/bin/pip install -r services/agent/requirements.txt \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple -q 2>&1 | tail -1
 echo -e "${GREEN}  ✓ Agent 依赖安装完成${NC}"
 
 # 前端依赖
