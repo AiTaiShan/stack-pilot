@@ -10,10 +10,10 @@ pub struct Model {
     pub git_url: String,
     pub owner_id: Uuid,
     pub description: Option<String>,
-    pub default_branch: String,
-    pub is_archived: bool,
-    pub created_at: chrono::NaiveDateTime,
-    pub updated_at: chrono::NaiveDateTime,
+    pub default_branch: Option<String>,
+    pub is_archived: Option<bool>,
+    pub created_at: Option<chrono::NaiveDateTime>,
+    pub updated_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

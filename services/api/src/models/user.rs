@@ -12,10 +12,10 @@ pub struct Model {
     pub role: String,
     pub phone: Option<String>,
     pub avatar: Option<String>,
-    pub is_active: bool,
+    pub is_active: Option<bool>,
     pub last_login_at: Option<chrono::NaiveDateTime>,
-    pub created_at: chrono::NaiveDateTime,
-    pub updated_at: chrono::NaiveDateTime,
+    pub created_at: Option<chrono::NaiveDateTime>,
+    pub updated_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

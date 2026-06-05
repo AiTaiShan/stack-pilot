@@ -81,8 +81,8 @@ pub async fn list_deployments(
                     "platform": d.platform,
                     "branch": d.branch,
                     "error_message": d.error_message,
-                    "created_at": d.created_at.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
-                    "updated_at": d.updated_at.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
+                    "created_at": d.created_at.unwrap_or_default().format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
+                    "updated_at": d.updated_at.unwrap_or_default().format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
                 })
             }).collect();
             Json(json!({
@@ -121,25 +121,25 @@ pub async fn create_deployment(
         project_id: Set(project_id),
         user_id: Set(Some(user_uuid)),
         status: Set(DeploymentStatus::Pending),
-        current_step: Set(Some("pending".to_string())),
+        current_step: Set(None),
         progress: Set(0),
         platform: Set(platform.clone()),
         config: Set(payload.config),
         git_url: Set(payload.git_url.clone()),
-        branch: Set(branch.clone()),
+        branch: Set(Some(branch.clone())),
         image_tag: Set(None),
         deploy_url: Set(None),
         commit_hash: Set(None),
         commit_message: Set(None),
         error_message: Set(None),
         error_details: Set(None),
-        can_resume: Set(0),
+        can_resume: Set(Some(0)),
         resume_data: Set(None),
         duration: Set(None),
         started_at: Set(None),
         completed_at: Set(None),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
+        updated_at: Set(Some(chrono::Utc::now().naive_utc())),
+        created_at: Set(Some(chrono::Utc::now().naive_utc())),
     };
 
     match new_dep.insert(&state.db).await {
@@ -196,8 +196,8 @@ pub async fn get_deployment(
                 "duration": dep.duration,
                 "started_at": dep.started_at.map(|t| t.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
                 "completed_at": dep.completed_at.map(|t| t.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
-                "created_at": dep.created_at.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
-                "updated_at": dep.updated_at.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
+                "created_at": dep.created_at.unwrap_or_default().format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
+                "updated_at": dep.updated_at.unwrap_or_default().format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
             }
         })),
         Ok(None) => Json(json!({"code": 404, "message": "部署不存在"})),
@@ -244,7 +244,7 @@ pub async fn get_deployment_logs(
 
     match DeploymentLogEntity::find()
         .filter(deployment_log::Column::DeploymentId.eq(uuid))
-        .order_by_asc(deployment_log::Column::Timestamp)
+        .order_by_asc(deployment_log::Column::CreatedAt)
         .all(&state.db)
         .await
     {
@@ -254,7 +254,7 @@ pub async fn get_deployment_logs(
                     "id": l.id.to_string(),
                     "level": l.level,
                     "message": l.message,
-                    "timestamp": l.timestamp.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
+                    "created_at": l.created_at.unwrap_or_default().format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
                 })
             }).collect();
             Json(json!({
@@ -283,7 +283,7 @@ pub async fn cancel_deployment(
                 let mut am: deployment::ActiveModel = dep.into();
                 am.status = Set(DeploymentStatus::Cancelled);
                 am.completed_at = Set(Some(chrono::Utc::now().naive_utc()));
-                am.updated_at = Set(chrono::Utc::now().naive_utc());
+                am.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
                 am.update(&state.db).await.ok();
             }
             Json(json!({"code": 200, "message": "部署已取消", "data": { "id": id } }))
@@ -339,7 +339,7 @@ pub async fn rollback_deployment(
         Ok(Some(dep)) => {
             let mut am: deployment::ActiveModel = dep.into();
             am.status = Set(DeploymentStatus::RollingBack);
-            am.updated_at = Set(chrono::Utc::now().naive_utc());
+            am.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
             match am.update(&state.db).await {
                 Ok(_) => Json(json!({"code": 200, "message": "回滚已启动", "data": { "id": id } })),
                 Err(e) => Json(json!({"code": 500, "message": format!("更新回滚状态失败: {}", e)})),
@@ -398,7 +398,7 @@ pub async fn update_compose_file(
             }
             let mut am: deployment::ActiveModel = dep.into();
             am.config = Set(Some(config));
-            am.updated_at = Set(chrono::Utc::now().naive_utc());
+            am.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
             match am.update(&state.db).await {
                 Ok(_) => Json(json!({"code": 200, "message": "compose 文件已更新", "data": { "id": id } })),
                 Err(e) => Json(json!({"code": 500, "message": format!("更新 compose 文件失败: {}", e)})),
@@ -430,7 +430,7 @@ pub async fn confirm_env_vars(
             let mut am: deployment::ActiveModel = dep.into();
             am.config = Set(Some(config));
             am.status = Set(DeploymentStatus::Running);
-            am.updated_at = Set(chrono::Utc::now().naive_utc());
+            am.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
             match am.update(&state.db).await {
                 Ok(_) => Json(json!({"code": 200, "message": "环境变量已确认", "data": { "id": id } })),
                 Err(e) => Json(json!({"code": 500, "message": format!("确认环境变量失败: {}", e)})),

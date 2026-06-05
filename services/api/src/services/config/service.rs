@@ -1,5 +1,6 @@
 use sea_orm::{EntityTrait, QueryFilter, ColumnTrait, ActiveModelTrait, Set};
 use uuid::Uuid;
+use serde_json::Value as JsonValue;
 use crate::error::AppError;
 use crate::models::system_config::{self, Entity as ConfigEntity, ActiveModel as ConfigActiveModel};
 
@@ -40,17 +41,19 @@ impl ConfigService {
             return Err(AppError::ValidationError(format!("配置项 '{}' 已存在", key)));
         }
         let now = chrono::Utc::now().naive_utc();
+        let json_value: JsonValue = serde_json::from_str(value)
+            .unwrap_or_else(|_| JsonValue::String(value.to_string()));
         let config = ConfigActiveModel {
             id: Set(Uuid::new_v4()),
             key: Set(key.to_string()),
-            value: Set(value.to_string()),
+            value: Set(json_value),
             value_type: Set(value_type.unwrap_or("string").to_string()),
             description: Set(description.map(|s| s.to_string())),
             default_value: Set(None),
             validation_rule: Set(None),
-            is_sensitive: Set(is_sensitive.unwrap_or(false)),
-            created_at: Set(now),
-            updated_at: Set(now),
+            is_sensitive: Set(Some(is_sensitive.unwrap_or(false))),
+            created_at: Set(Some(now)),
+            updated_at: Set(Some(now)),
         };
         let result = config.insert(&self.db).await
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
@@ -71,11 +74,15 @@ impl ConfigService {
             .map_err(|e| AppError::DatabaseError(e.to_string()))?
             .ok_or_else(|| AppError::NotFound(format!("配置项 '{}' 不存在", key)))?;
         let mut active: ConfigActiveModel = config.into();
-        if let Some(v) = value { active.value = Set(v.to_string()); }
+        if let Some(v) = value {
+            let json_value: JsonValue = serde_json::from_str(v)
+                .unwrap_or_else(|_| JsonValue::String(v.to_string()));
+            active.value = Set(json_value);
+        }
         if let Some(vt) = value_type { active.value_type = Set(vt.to_string()); }
         if let Some(d) = description { active.description = Set(Some(d.to_string())); }
-        if let Some(s) = is_sensitive { active.is_sensitive = Set(s); }
-        active.updated_at = Set(chrono::Utc::now().naive_utc());
+        if let Some(s) = is_sensitive { active.is_sensitive = Set(Some(s)); }
+        active.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
         let result = active.update(&self.db).await
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
         Ok(self.to_item(&result, false))
@@ -103,10 +110,13 @@ impl ConfigService {
 
     /// 将数据库模型转为返回结构，敏感值遮蔽
     fn to_item(&self, model: &system_config::Model, mask_sensitive: bool) -> ConfigItem {
-        let value = if mask_sensitive && model.is_sensitive {
+        let value = if mask_sensitive && model.is_sensitive.unwrap_or(false) {
             SENSITIVE_MASK.to_string()
         } else {
-            model.value.clone()
+            match &model.value {
+                JsonValue::String(s) => s.clone(),
+                other => other.to_string(),
+            }
         };
         ConfigItem {
             id: model.id.to_string(),
@@ -114,9 +124,12 @@ impl ConfigService {
             value,
             value_type: model.value_type.clone(),
             description: model.description.clone(),
-            default_value: model.default_value.clone(),
-            validation_rule: model.validation_rule.clone(),
-            is_sensitive: model.is_sensitive,
+            default_value: model.default_value.as_ref().map(|v| match v {
+                JsonValue::String(s) => s.clone(),
+                other => other.to_string(),
+            }),
+            validation_rule: model.validation_rule.as_ref().map(|v| v.to_string()),
+            is_sensitive: model.is_sensitive.unwrap_or(false),
         }
     }
 }

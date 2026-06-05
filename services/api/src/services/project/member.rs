@@ -41,7 +41,9 @@ impl MemberService {
             project_id: Set(pid),
             user_id: Set(uid),
             role: Set(role.to_string()),
-            invited_at: Set(chrono::Utc::now().naive_utc()),
+            invited_by: Set(None),
+            created_at: Set(Some(chrono::Utc::now().naive_utc())),
+            updated_at: Set(Some(chrono::Utc::now().naive_utc())),,
         };
 
         let result = member

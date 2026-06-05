@@ -29,7 +29,7 @@ impl UserService {
             username: u.username,
             email: u.email,
             role: u.role,
-            is_active: u.is_active,
+            is_active: u.is_active.unwrap_or(true),
         }))
     }
 
@@ -45,7 +45,7 @@ impl UserService {
             username: u.username,
             email: u.email,
             role: u.role,
-            is_active: u.is_active,
+            is_active: u.is_active.unwrap_or(true),
         }))
     }
 
@@ -70,7 +70,7 @@ impl UserService {
             username: u.username,
             email: u.email,
             role: u.role,
-            is_active: u.is_active,
+            is_active: u.is_active.unwrap_or(true),
         }))
     }
 
@@ -85,7 +85,7 @@ impl UserService {
             username: u.username,
             email: u.email,
             role: u.role,
-            is_active: u.is_active,
+            is_active: u.is_active.unwrap_or(true),
         }).collect())
     }
 
@@ -113,7 +113,7 @@ impl UserService {
             role: Set("user".to_string()),
             phone: Set(None),
             avatar: Set(None),
-            is_active: Set(true),
+            is_active: Set(Some(true)),
             last_login_at: Set(None),
             ..Default::default()
         };
@@ -129,7 +129,7 @@ impl UserService {
             username: result.username,
             email: result.email,
             role: result.role,
-            is_active: result.is_active,
+            is_active: result.is_active.unwrap_or(true),
         })
     }
 
@@ -176,7 +176,7 @@ impl UserService {
             username: result.username,
             email: result.email,
             role: result.role,
-            is_active: result.is_active,
+            is_active: result.is_active.unwrap_or(true),
         })
     }
 

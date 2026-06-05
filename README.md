@@ -87,55 +87,87 @@
 
 ## 快速开始
 
-### 1. 启动数据库和 Redis
+### 前置条件
+
+- Docker & Docker Compose
+- Rust 1.96+
+- Python 3.10+
+- pnpm
+
+### 一键初始化（推荐）
 
 ```bash
-docker-compose up -d db redis
+git clone https://github.com/your-org/stack-pilot.git
+cd stack-pilot
+./scripts/init.sh
 ```
 
-### 2. 配置环境变量
+初始化脚本会自动完成：
+1. 检查依赖是否安装
+2. 从 `.env.example` 创建 `.env`
+3. 启动 PostgreSQL 和 Redis 容器
+4. 执行数据库迁移（创建所有表和枚举类型）
+5. 安装 Agent 和前端依赖
+
+> 初始化完成后编辑 `.env`，填写 `LLM_API_KEY` 等配置。
+
+### 启动服务
 
 ```bash
+# 后端（API + Agent）
+./scripts/start.sh
+
+# 前端（另一个终端）
+cd frontend && pnpm dev
+```
+
+### 手动步骤
+
+如果不想用一键脚本，按以下顺序操作：
+
+```bash
+# 1. 配置环境变量
 cp .env.example .env
 # 编辑 .env，配置 LLM_API_KEY、JWT_SECRET 等
-```
 
-### 3. 一键启动（推荐）
+# 2. 启动数据库和 Redis
+docker-compose up -d db redis
 
-```bash
-./scripts/start.sh
-```
+# 3. 数据库迁移
+./scripts/migrate.sh
+# 或手动执行：
+# cd migration && DATABASE_URL=postgresql://user:password@localhost:15432/stackpilot cargo run -- up
 
-该脚本会自动启动：
-- Agent 服务（:9091）
-- Rust 主服务（:9099）
-
-### 4. 或手动启动
-
-```bash
-# Agent 服务
+# 4. 启动 Agent 服务
 cd services/agent
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 uvicorn src.main:app --host 0.0.0.0 --port 9091
 
-# Rust 主服务
+# 5. 启动 Rust 主服务（自动执行迁移）
 cd services/api
 cargo run
-```
 
-### 5. 前端
-
-```bash
+# 6. 启动前端
 cd frontend
-pnpm install
-pnpm run dev
+pnpm install && pnpm dev
 ```
 
-### 6. 运行测试
+### 运行测试
 
 ```bash
 cd services/api
 cargo test
+```
+
+### 新增迁移
+
+当表结构变更时，创建新的迁移文件：
+
+```bash
+# 在 migration/src/ 下新建迁移文件，例如 m20240201_000002_add_xxx.rs
+# 在 migration/src/lib.rs 的 migrations() 中注册
+# 执行迁移
+./scripts/migrate.sh
 ```
 
 ## 项目结构

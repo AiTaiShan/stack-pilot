@@ -8,14 +8,14 @@ pub struct Model {
     pub id: Uuid,
     #[sea_orm(unique)]
     pub key: String,
-    pub value: String,
+    pub value: Json,
     pub value_type: String,
     pub description: Option<String>,
-    pub default_value: Option<String>,
-    pub validation_rule: Option<String>,
-    pub is_sensitive: bool,
-    pub created_at: chrono::NaiveDateTime,
-    pub updated_at: chrono::NaiveDateTime,
+    pub default_value: Option<Json>,
+    pub validation_rule: Option<Json>,
+    pub is_sensitive: Option<bool>,
+    pub created_at: Option<chrono::NaiveDateTime>,
+    pub updated_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

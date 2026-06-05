@@ -27,8 +27,8 @@ impl ProjectService {
             git_url: Set(git_url.to_string()),
             owner_id: Set(owner_id),
             description: Set(description.map(|s| s.to_string())),
-            default_branch: Set("main".to_string()),
-            is_archived: Set(false),
+            default_branch: Set(Some("main".to_string())),
+            is_archived: Set(Some(false)),
             ..Default::default()
         };
 
@@ -44,7 +44,7 @@ impl ProjectService {
             git_url: result.git_url,
             owner_id: result.owner_id.to_string(),
             description: result.description,
-            default_branch: result.default_branch,
+            default_branch: result.default_branch.unwrap_or_else(|| "main".to_string()),
         })
     }
 
@@ -63,7 +63,7 @@ impl ProjectService {
             git_url: p.git_url,
             owner_id: p.owner_id.to_string(),
             description: p.description,
-            default_branch: p.default_branch,
+            default_branch: p.default_branch.unwrap_or_else(|| "main".to_string()),
         }))
     }
 
@@ -87,7 +87,7 @@ impl ProjectService {
             git_url: p.git_url,
             owner_id: p.owner_id.to_string(),
             description: p.description,
-            default_branch: p.default_branch,
+            default_branch: p.default_branch.unwrap_or_else(|| "main".to_string()),
         }).collect())
     }
 
@@ -127,7 +127,7 @@ impl ProjectService {
             git_url: result.git_url,
             owner_id: result.owner_id.to_string(),
             description: result.description,
-            default_branch: result.default_branch,
+            default_branch: result.default_branch.unwrap_or_else(|| "main".to_string()),
         })
     }
 

@@ -26,7 +26,7 @@ impl DeploymentStateManager {
 
     pub async fn recover_on_startup(&self) -> Result<(), AppError> {
         let running = DeploymentEntity::find()
-            .filter(deployment::Column::Status.eq("running"))
+            .filter(deployment::Column::Status.eq(DeploymentStatus::Running))
             .all(&self.db).await
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
         for dep in running {

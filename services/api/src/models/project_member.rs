@@ -9,7 +9,9 @@ pub struct Model {
     pub project_id: Uuid,
     pub user_id: Uuid,
     pub role: String,
-    pub invited_at: chrono::NaiveDateTime,
+    pub invited_by: Option<Uuid>,
+    pub created_at: Option<chrono::NaiveDateTime>,
+    pub updated_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

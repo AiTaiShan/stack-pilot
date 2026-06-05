@@ -3,10 +3,24 @@ use uuid::Uuid;
 use sea_orm::{EntityTrait, ActiveModelTrait, Set};
 
 use crate::error::AppError;
-use crate::models::deployment::{Entity as DeploymentEntity, ActiveModel as DeploymentActiveModel, DeploymentStatus};
+use crate::models::deployment::{Entity as DeploymentEntity, ActiveModel as DeploymentActiveModel, DeploymentStatus, DeploymentStep};
 
 const STEPS: [&str; 8] = ["clone", "generate_review", "build", "env_review", "push", "deploy", "configure", "verify"];
 const STEP_PROGRESS: [i32; 8] = [10, 35, 55, 65, 75, 85, 93, 100];
+
+fn parse_step(s: &str) -> Option<DeploymentStep> {
+    match s {
+        "clone" => Some(DeploymentStep::Clone),
+        "generate_review" => Some(DeploymentStep::GenerateReview),
+        "build" => Some(DeploymentStep::Build),
+        "env_review" => Some(DeploymentStep::EnvReview),
+        "push" => Some(DeploymentStep::Push),
+        "deploy" => Some(DeploymentStep::Deploy),
+        "configure" => Some(DeploymentStep::Configure),
+        "verify" => Some(DeploymentStep::Verify),
+        _ => None,
+    }
+}
 
 pub async fn check_signals(cancel_rx: &watch::Receiver<bool>, pause_rx: &watch::Receiver<bool>) -> Result<(), AppError> {
     if *cancel_rx.borrow() { return Err(AppError::DeploymentCancelled); }
@@ -78,7 +92,7 @@ pub async fn update_deployment_progress(db: &sea_orm::DatabaseConnection, id: Uu
         .map_err(|e| AppError::DatabaseError(e.to_string()))?
         .ok_or_else(|| AppError::NotFound("部署不存在".to_string()))?;
     let mut am: DeploymentActiveModel = dep.into();
-    am.current_step = Set(Some(step.to_string()));
+    am.current_step = Set(parse_step(step));
     am.progress = Set(progress);
     am.update(db).await.map_err(|e| AppError::DatabaseError(e.to_string()))?;
     Ok(())
@@ -91,7 +105,9 @@ pub async fn write_deployment_log(db: &sea_orm::DatabaseConnection, deployment_i
         deployment_id: Set(deployment_id),
         level: Set(level.to_string()),
         message: Set(message.to_string()),
-        timestamp: Set(chrono::Utc::now().naive_utc()),
+        details: Set(None),
+        step: Set(None),
+        created_at: Set(Some(chrono::Utc::now().naive_utc())),
     }.insert(db).await.map_err(|e| AppError::DatabaseError(e.to_string()))?;
     Ok(())
 }

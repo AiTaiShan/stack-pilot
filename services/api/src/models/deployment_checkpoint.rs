@@ -1,6 +1,5 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "deployment_checkpoints")]
@@ -9,8 +8,10 @@ pub struct Model {
     pub id: Uuid,
     pub deployment_id: Uuid,
     pub step: String,
-    pub data: JsonValue,
-    pub created_at: chrono::NaiveDateTime,
+    pub step_index: i32,
+    pub state_data: Option<Json>,
+    pub resources_created: Option<Json>,
+    pub created_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

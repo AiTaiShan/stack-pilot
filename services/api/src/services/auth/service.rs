@@ -45,7 +45,7 @@ impl AuthService {
         let user_model = self.user_service.get_model_by_username(username).await?
             .ok_or_else(|| AppError::AuthError("用户名或密码错误".to_string()))?;
 
-        if !user_model.is_active {
+        if !user_model.is_active.unwrap_or(true) {
             return Err(AppError::AuthError("用户已被禁用".to_string()));
         }
 

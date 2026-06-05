@@ -9,7 +9,9 @@ pub struct Model {
     pub deployment_id: Uuid,
     pub level: String,
     pub message: String,
-    pub timestamp: chrono::NaiveDateTime,
+    pub details: Option<Json>,
+    pub step: Option<String>,
+    pub created_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

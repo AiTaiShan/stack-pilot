@@ -1,4 +1,5 @@
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+use sea_orm_migration::MigratorTrait;
 use tracing::info;
 
 use crate::config::AppConfig;
@@ -14,7 +15,16 @@ pub async fn get_db(config: &AppConfig) -> Result<DatabaseConnection, AppError> 
         .acquire_timeout(std::time::Duration::from_secs(8))
         .idle_timeout(std::time::Duration::from_secs(8));
 
-    Database::connect(opt)
+    let db = Database::connect(opt)
         .await
-        .map_err(|e| AppError::DatabaseError(e.to_string()))
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    // 自动执行数据库迁移
+    info!("执行数据库迁移...");
+    migration::Migrator::up(&db, None)
+        .await
+        .map_err(|e| AppError::DatabaseError(format!("迁移失败: {}", e)))?;
+    info!("数据库迁移完成");
+
+    Ok(db)
 }
