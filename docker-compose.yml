@@ -13,7 +13,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/stackpilot
       - REDIS_URL=redis://redis:6379
-      - AGENT_SERVICE_URL=http://agent:9091
+      - AGENT_SERVICE_URL=http://agent:8066
     depends_on:
       db:
         condition: service_healthy
@@ -27,7 +27,7 @@ services:
       context: ./services/agent
       dockerfile: Dockerfile
     ports:
-      - "9091:9091"
+      - "8066:8066"
     env_file:
       - .env
     restart: unless-stopped

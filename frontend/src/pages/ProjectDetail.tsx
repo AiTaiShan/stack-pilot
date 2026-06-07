@@ -54,7 +54,7 @@ const ProjectDetail: React.FC = () => {
     try {
       const [projectRes, deploymentsRes] = await Promise.all([
         client.get(`/projects/${id}`),
-        client.get(`/deployments/?project_id=${id}`)
+        client.get(`/deployments?project_id=${id}`)
       ])
       setProject(projectRes.data.data)
       const deps = deploymentsRes.data.data.items || []
@@ -133,7 +133,7 @@ const ProjectDetail: React.FC = () => {
 
   const handleDeploy = async (values: { branch: string; platform: string }) => {
     try {
-      await client.post('/deployments/', {
+      await client.post('/deployments', {
         git_url: project.git_url,
         branch: values.branch,
         platform: values.platform,
@@ -174,7 +174,7 @@ const ProjectDetail: React.FC = () => {
 
   const handleRedeploy = async (record: any) => {
     try {
-      await client.post('/deployments/', {
+      await client.post('/deployments', {
         git_url: project.git_url,
         branch: record.branch,
         platform: record.platform,

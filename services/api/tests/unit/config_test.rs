@@ -17,7 +17,7 @@ fn test_config_default_values() {
     let config = AppConfig::from_env();
 
     assert_eq!(config.server_port, 9099);
-    assert_eq!(config.agent_service_url, "http://localhost:9091");
+    assert_eq!(config.agent_service_url, "http://localhost:8066");
     assert_eq!(config.jwt_secret, "your-secret-key-here");
     assert_eq!(config.jwt_algorithm, "HS256");
     assert_eq!(config.jwt_expire_minutes, 120);
@@ -29,14 +29,14 @@ fn test_config_custom_values() {
     std::env::set_var("DATABASE_URL", "postgresql://test:test@localhost/test");
     std::env::set_var("JWT_SECRET", "test-secret");
     std::env::set_var("SERVER_PORT", "8080");
-    std::env::set_var("AGENT_SERVICE_URL", "http://custom:9091");
+    std::env::set_var("AGENT_SERVICE_URL", "http://custom:8066");
 
     let config = AppConfig::from_env();
 
     assert_eq!(config.database_url, "postgresql://test:test@localhost/test");
     assert_eq!(config.jwt_secret, "test-secret");
     assert_eq!(config.server_port, 8080);
-    assert_eq!(config.agent_service_url, "http://custom:9091");
+    assert_eq!(config.agent_service_url, "http://custom:8066");
 
     // 清理
     std::env::remove_var("DATABASE_URL");

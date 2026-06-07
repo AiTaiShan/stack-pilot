@@ -10,11 +10,11 @@ const Dashboard: React.FC = () => {
     const fetchStats = async () => {
       try {
         const [projectsRes, statsRes] = await Promise.all([
-          client.get('/projects/'),
-          client.get('/monitoring/deployments/stats')
+          client.get('/projects'),
+          client.get('/monitoring/stats')
         ])
         setStats({
-          projects: projectsRes.data.data.pagination.total,
+          projects: projectsRes.data.data.total,
           deployments: statsRes.data.data.total,
           success: statsRes.data.data.success,
           failed: statsRes.data.data.failed

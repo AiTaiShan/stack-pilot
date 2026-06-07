@@ -1,18 +1,22 @@
 use axum::Router;
+use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use uuid::Uuid;
 use std::sync::Arc;
 
 use crate::error::AppError;
 use crate::services::project::ProjectService;
 use crate::services::scanner::git::branch::list_remote_branches;
+use crate::utils::jwt::verify_token;
 
 #[derive(Clone)]
 pub struct ProjectsState {
     pub project_service: Arc<ProjectService>,
+    pub jwt_secret: String,
 }
 
 #[derive(Deserialize)]
@@ -34,6 +38,19 @@ fn validate_git_url(url: &str) -> Result<(), AppError> {
     } else {
         Err(AppError::ValidationError("无效的 Git URL".to_string()))
     }
+}
+
+fn extract_user_id(headers: &HeaderMap, jwt_secret: &str) -> Result<String, AppError> {
+    let auth_header = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError::AuthError("缺少 Authorization 头".to_string()))?;
+    let token = auth_header
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| AppError::AuthError("无效的 Authorization 格式".to_string()))?;
+    let claims = verify_token(token, jwt_secret)
+        .map_err(|_| AppError::AuthError("无效的 Token".to_string()))?;
+    Ok(claims.sub)
 }
 
 pub async fn list_projects(
@@ -78,14 +95,18 @@ pub async fn get_project(
 
 pub async fn create_project(
     State(state): State<ProjectsState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateProjectRequest>,
 ) -> Json<Value> {
     if let Err(e) = validate_git_url(&payload.git_url) {
         return Json(json!({"code": 400, "message": e.to_string()}));
     }
 
-    // TODO: 从 JWT 获取 user_id
-    let owner_id = uuid::Uuid::new_v4();
+    let user_id_str = match extract_user_id(&headers, &state.jwt_secret) {
+        Ok(id) => id,
+        Err(e) => return Json(json!({"code": 401, "message": e.to_string()})),
+    };
+    let owner_id = Uuid::parse_str(&user_id_str).unwrap_or_else(|_| Uuid::new_v4());
 
     match state.project_service.create(
         &payload.name,

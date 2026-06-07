@@ -31,7 +31,7 @@ if check_service "http://localhost:9099/api/v1/health" "Rust 主服务"; then
     RUST_RUNNING=true
 fi
 
-if check_service "http://localhost:9091/api/v1/health" "Python Agent 服务"; then
+if check_service "http://localhost:8066/api/v1/health" "Python Agent 服务"; then
     PYTHON_RUNNING=true
 fi
 
@@ -90,7 +90,7 @@ if [ "$RUST_RUNNING" = true ]; then
 fi
 
 if [ "$PYTHON_RUNNING" = true ]; then
-    test_health_check "http://localhost:9091/api/v1/health" "Python Agent 服务" 100
+    test_health_check "http://localhost:8066/api/v1/health" "Python Agent 服务" 100
 fi
 
 echo "3. 并发性能测试"
@@ -101,7 +101,7 @@ if [ "$RUST_RUNNING" = true ]; then
 fi
 
 if [ "$PYTHON_RUNNING" = true ]; then
-    test_concurrent "http://localhost:9091/api/v1/health" "Python Agent 服务" 10 1000
+    test_concurrent "http://localhost:8066/api/v1/health" "Python Agent 服务" 10 1000
 fi
 
 echo "4. 内存使用对比"

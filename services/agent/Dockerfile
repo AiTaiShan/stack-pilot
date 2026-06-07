@@ -7,6 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua
 
 COPY src/ src/
 
-EXPOSE 9091
+EXPOSE 8066
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "9091"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8066"]

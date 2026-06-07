@@ -16,7 +16,7 @@ docker-compose -f docker-compose.rust.yml up -d
 
 echo "StackPilot 已启动"
 echo "  - Rust 主服务: http://localhost:9099"
-echo "  - Agent 服务: http://localhost:9091"
+echo "  - Agent 服务: http://localhost:8066"
 echo "  - PostgreSQL: localhost:15432"
 echo "  - Redis: localhost:16379"
 echo ""

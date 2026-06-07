@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "StackPilot Agent"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
-    SERVER_PORT: int = 9091
+    SERVER_PORT: int = 8066
 
     LLM_PROVIDER: str = "dashscope"
     LLM_API_KEY: Optional[str] = None

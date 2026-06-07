@@ -47,12 +47,12 @@ const Deployments: React.FC = () => {
   const fetchDeployments = async () => {
     setLoading(true)
     try {
-      const projectsRes = await client.get('/projects/')
+      const projectsRes = await client.get('/projects')
       const projects = projectsRes.data.data.items || []
 
       const deployResults = await Promise.all(
         projects.map((project: any) =>
-          client.get(`/deployments/?project_id=${project.id}`)
+          client.get(`/deployments?project_id=${project.id}`)
             .then(res => (res.data.data?.items || []).map((d: any) => ({ ...d, project_name: project.name })))
             .catch(() => [])
         )
@@ -148,7 +148,7 @@ const Deployments: React.FC = () => {
 
   const handleRedeploy = async (record: any) => {
     try {
-      await client.post('/deployments/', {
+      await client.post('/deployments', {
         git_url: record.git_url,
         branch: record.branch,
         platform: record.platform,

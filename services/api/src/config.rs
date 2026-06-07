@@ -55,7 +55,7 @@ impl AppConfig {
                 .unwrap_or(7),
             cors_origins,
             agent_service_url: std::env::var("AGENT_SERVICE_URL")
-                .unwrap_or_else(|_| "http://localhost:9091".to_string()),
+                .unwrap_or_else(|_| "http://localhost:8066".to_string()),
             server_port: std::env::var("SERVER_PORT")
                 .unwrap_or_else(|_| "9099".to_string())
                 .parse()

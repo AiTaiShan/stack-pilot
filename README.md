@@ -8,7 +8,7 @@
 ┌─────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   Frontend   │────▶│   services/api  │────▶│ services/agent  │
 │  React+TS   │     │  (Rust/Axum)    │     │ (Python/LangG)  │
-│  :5174      │     │    :9099        │     │    :9091        │
+│  :5174      │     │    :9099        │     │    :8066        │
 └─────────────┘     └─────────────────┘     └─────────────────┘
                            │
                      ┌─────┴─────┐
@@ -141,7 +141,7 @@ docker-compose up -d db redis
 # 4. 启动 Agent 服务（首次需要创建虚拟环境）
 python3 -m venv services/agent/.venv
 services/agent/.venv/bin/pip install -r services/agent/requirements.txt
-services/agent/.venv/bin/uvicorn --app-dir services/agent src.main:app --host 0.0.0.0 --port 9091
+services/agent/.venv/bin/uvicorn --app-dir services/agent src.main:app --host 0.0.0.0 --port 8066
 
 # 5. 启动 Rust 主服务（另一个终端）
 cd services/api
@@ -240,7 +240,7 @@ stack-pilot/
 | `REFRESH_TOKEN_DAYS` | refresh_token 过期时间 | `7` |
 | `CORS_ORIGINS` | CORS 允许源（逗号分隔） | `http://localhost:5173,http://localhost:5174` |
 | `SERVER_PORT` | 主服务端口 | `9099` |
-| `AGENT_SERVICE_URL` | Agent 服务地址 | `http://localhost:9091` |
+| `AGENT_SERVICE_URL` | Agent 服务地址 | `http://localhost:8066` |
 | `LLM_PROVIDER` | LLM 服务商 | `dashscope` |
 | `LLM_API_KEY` | LLM API Key | — |
 | `LLM_MODEL` | LLM 模型名 | `qwen-plus` |

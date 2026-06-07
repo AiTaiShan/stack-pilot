@@ -64,6 +64,7 @@ async fn main() {
         auth_service,
     };
     let projects_state = ProjectsState {
+        jwt_secret: config.jwt_secret.clone(),
         project_service,
     };
     let monitoring_state = MonitoringState {

@@ -23,7 +23,7 @@ const Projects: React.FC = () => {
   const fetchProjects = async () => {
     setLoading(true)
     try {
-      const response = await client.get('/projects/')
+      const response = await client.get('/projects')
       setProjects(response.data.data.items)
     } catch (error) {
       message.error('获取项目列表失败')
@@ -36,7 +36,7 @@ const Projects: React.FC = () => {
 
   const handleCreate = async (values: { name: string; git_url: string; description?: string }) => {
     try {
-      await client.post('/projects/', values)
+      await client.post('/projects', values)
       message.success('项目创建成功')
       setModalVisible(false)
       form.resetFields()
