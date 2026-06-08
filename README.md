@@ -91,7 +91,7 @@
 
 - Docker & Docker Compose
 - [Rust 1.96+](https://rustup.rs/)（`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`）
-- Python 3.10+（需安装 `python3-venv`：`sudo apt install python3-venv`）
+- Python 3.10+ & [uv](https://docs.astral.sh/uv/)（`curl -LsSf https://astral.sh/uv/install.sh | sh`）
 - [pnpm](https://pnpm.io/)
 - 系统依赖：`sudo apt install pkg-config libssl-dev`
 - 开发工具（可选）：`cargo install cargo-watch`（Rust 热加载）
@@ -138,10 +138,10 @@ docker-compose up -d db redis
 # 3. 数据库迁移（也可跳过，Rust 服务启动时会自动迁移）
 ./scripts/migrate.sh
 
-# 4. 启动 Agent 服务（首次需要创建虚拟环境）
-python3 -m venv services/agent/.venv
-services/agent/.venv/bin/pip install -r services/agent/requirements.txt
-services/agent/.venv/bin/uvicorn --app-dir services/agent src.main:app --host 0.0.0.0 --port 8066
+# 4. 启动 Agent 服务
+cd services/agent
+uv sync
+uv run uvicorn src.main:app --host 0.0.0.0 --port 8066
 
 # 5. 启动 Rust 主服务（另一个终端）
 cd services/api
@@ -209,7 +209,8 @@ stack-pilot/
 │       │   ├── api/            # API 路由（health/review）
 │       │   ├── llm/            # LLM 提供商（OpenAI/DashScope）
 │       │   └── review/         # 审核逻辑（Dockerfile/Compose/环境变量）
-│       └── requirements.txt
+│       ├── pyproject.toml
+│       └── uv.lock
 ├── frontend/                   # React + TypeScript 前端
 │   ├── src/
 │   │   ├── api/                # Axios 客户端

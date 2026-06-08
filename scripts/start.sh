@@ -39,20 +39,22 @@ fi
 export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$PATH"
 
 # ── Agent 服务 ──────────────────────────────────────
-AGENT_VENV="services/agent/.venv"
-
 echo "启动 Agent 服务..."
-if [ ! -d "$AGENT_VENV" ]; then
-    echo "  创建 Python 虚拟环境..."
-    python3 -m venv "$AGENT_VENV"
+if ! command -v uv &>/dev/null; then
+    echo "错误: 未找到 uv（Python 包管理器）"
+    echo "请安装 uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
 fi
 
-"$AGENT_VENV/bin/pip" install -r services/agent/requirements.txt \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple -q
+cd services/agent
+uv sync --quiet
+cd ../..
 
 AGENT_LOG="/tmp/stackpilot-agent.log"
-"$AGENT_VENV/bin/uvicorn" --app-dir services/agent src.main:app --reload --reload-dir services/agent \
+cd services/agent && uv run uvicorn src.main:app --reload --reload-dir src \
     --host 0.0.0.0 --port 8066 > "$AGENT_LOG" 2>&1 &
+AGENT_PID=$!
+cd ../..
 AGENT_PID=$!
 
 # 等待 Agent 服务启动并检查存活
