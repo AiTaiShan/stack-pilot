@@ -1,4 +1,4 @@
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 use sea_orm::EntityTrait;
 use crate::error::AppError;
@@ -25,6 +25,12 @@ pub async fn execute(
         .unwrap_or("");
     let repo_dir = std::path::PathBuf::from(repo_dir_str);
 
+    // 从 scan_result 读取端口
+    let port = config.get("scan_result")
+        .and_then(|s| s.get("port"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(8080) as u16;
+
     // 从 git_url 提取 compose 项目名（docker compose 用目录名作项目名）
     let repo_name = dep.git_url
         .as_ref()
@@ -42,6 +48,8 @@ pub async fn execute(
                 .output()
                 .await;
 
+            let mut containers_ok = false;
+
             match output {
                 Ok(out) if out.status.success() => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -57,20 +65,22 @@ pub async fn execute(
                                 let stdout2 = String::from_utf8_lossy(&out2.stdout);
                                 if stdout2.contains("Up") {
                                     info!("容器运行正常（docker-compose）");
+                                    containers_ok = true;
                                 } else {
-                                    info!("警告: 未找到运行中的容器");
+                                    warn!("未找到运行中的容器");
                                 }
                             }
                             _ => {
-                                info!("警告: 无法检查容器状态");
+                                warn!("无法检查容器状态");
                             }
                         }
                     } else {
                         // 解析 compose ps JSON 输出
                         if stdout.contains("\"running\"") || stdout.contains("\"Up\"") {
                             info!("容器运行正常");
+                            containers_ok = true;
                         } else {
-                            info!("警告: 容器状态异常: {}", stdout.trim());
+                            warn!("容器状态异常: {}", stdout.trim());
                         }
                     }
                 }
@@ -84,14 +94,31 @@ pub async fn execute(
                         Ok(out2) if out2.status.success() => {
                             let stdout2 = String::from_utf8_lossy(&out2.stdout);
                             if stdout2.trim().is_empty() {
-                                info!("警告: 未找到运行中的容器");
+                                warn!("未找到运行中的容器");
                             } else {
                                 info!("容器状态:\n{}", stdout2.trim());
+                                containers_ok = true;
                             }
                         }
                         _ => {
-                            info!("警告: 无法检查容器状态");
+                            warn!("无法检查容器状态");
                         }
+                    }
+                }
+            }
+
+            // 检查端口监听
+            if containers_ok {
+                info!("检查端口 {} 监听状态...", port);
+                match check_port_listening("localhost", port, 5).await {
+                    Ok(true) => {
+                        info!("端口 {} 正在监听", port);
+                    }
+                    Ok(false) => {
+                        warn!("端口 {} 未监听，服务可能尚未完全启动", port);
+                    }
+                    Err(e) => {
+                        warn!("端口检查失败: {}", e);
                     }
                 }
             }
@@ -118,15 +145,15 @@ pub async fn execute(
                     if ready > 0 {
                         info!("Kubernetes 部署验证通过: {} 个 Pod 就绪", ready);
                     } else {
-                        info!("警告: Kubernetes 部署无就绪 Pod");
+                        warn!("Kubernetes 部署无就绪 Pod");
                     }
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    info!("Kubernetes 验证失败: {}", stderr.trim());
+                    warn!("Kubernetes 验证失败: {}", stderr.trim());
                 }
                 Err(e) => {
-                    info!("kubectl 命令执行失败: {}", e);
+                    warn!("kubectl 命令执行失败: {}", e);
                 }
             }
         }
@@ -137,4 +164,18 @@ pub async fn execute(
 
     info!("步骤 8 完成: 部署验证");
     Ok(())
+}
+
+/// 检查端口是否在监听
+async fn check_port_listening(host: &str, port: u16, timeout_secs: u64) -> Result<bool, AppError> {
+    use tokio::net::TcpStream;
+    use tokio::time::{timeout, Duration};
+
+    let addr = format!("{}:{}", host, port);
+
+    match timeout(Duration::from_secs(timeout_secs), TcpStream::connect(&addr)).await {
+        Ok(Ok(_)) => Ok(true),
+        Ok(Err(_)) => Ok(false),
+        Err(_) => Ok(false), // 超时视为未监听
+    }
 }
