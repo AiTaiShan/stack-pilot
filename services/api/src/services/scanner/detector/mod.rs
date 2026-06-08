@@ -24,6 +24,24 @@ pub struct ServiceDetectionResult {
     pub service_dir: PathBuf,
     /// 检测到的语言信息
     pub detection: DetectionResult,
+    /// 模块类型: common/gateway/registry/config/service
+    pub module_type: String,
+}
+
+/// 根据模块名判断类型
+fn detect_module_type(name: &str) -> &'static str {
+    let nl = name.to_lowercase();
+    if nl.contains("common") || nl.contains("util") {
+        "common"
+    } else if nl.contains("gateway") || nl.contains("zuul") {
+        "gateway"
+    } else if nl.contains("eureka") || nl.contains("registry") {
+        "registry"
+    } else if nl.contains("config") {
+        "config"
+    } else {
+        "service"
+    }
 }
 
 /// 扫描结果
@@ -134,15 +152,25 @@ async fn scan_dir_recursive(
 
         info!("扫描目录: {}, has_pom={}, has_pkg={}, has_src={}, files={:?}, dirs={:?}", dir_name, has_pom, has_pkg, has_src, sub_files, sub_dirs);
 
+        // 检测模块类型
+        let module_type = detect_module_type(dir_name);
+
+        // 跳过 common 类型（公共库，不需要部署）
+        if module_type == "common" {
+            info!("跳过公共库模块: {} (type={})", dir_name, module_type);
+            continue;
+        }
+
         if has_pom && has_src {
             // 有 pom.xml 和 src/ 目录，认为是可部署服务
-            info!("检测到可部署服务: {}", dir_name);
+            info!("检测到可部署服务: {} (type={})", dir_name, module_type);
             if let Ok(Some(detection)) = detect_single_app(&sub_ctx).await {
                 info!("服务 {} 检测成功: language={}", dir_name, detection.language);
                 results.push(ServiceDetectionResult {
                     service_name: dir_name.clone(),
                     service_dir: ctx.dir_path.join(dir_name),
                     detection,
+                    module_type: module_type.to_string(),
                 });
             } else {
                 info!("服务 {} 检测失败", dir_name);
@@ -154,13 +182,16 @@ async fn scan_dir_recursive(
             results.extend(sub_results);
         } else if has_pkg {
             // 纯前端模块
-            info!("检测到前端模块: {}", dir_name);
-            if let Ok(Some(detection)) = detect_single_app(&sub_ctx).await {
-                results.push(ServiceDetectionResult {
-                    service_name: dir_name.clone(),
-                    service_dir: ctx.dir_path.join(dir_name),
-                    detection,
-                });
+            info!("检测到前端模块: {} (type={})", dir_name, module_type);
+            if module_type != "common" {
+                if let Ok(Some(detection)) = detect_single_app(&sub_ctx).await {
+                    results.push(ServiceDetectionResult {
+                        service_name: dir_name.clone(),
+                        service_dir: ctx.dir_path.join(dir_name),
+                        detection,
+                        module_type: module_type.to_string(),
+                    });
+                }
             }
         }
     }
@@ -189,12 +220,17 @@ async fn detect_multi_module_java(ctx: &ProjectContext) -> Result<Vec<ServiceDet
         for module_name in &module_names {
             let module_dir = ctx.dir_path.join(module_name);
             if module_dir.is_dir() {
+                let module_type = detect_module_type(module_name);
+                if module_type == "common" {
+                    continue;
+                }
                 let sub_ctx = ProjectContext::new(module_dir.clone());
                 if let Ok(Some(detection)) = detect_single_app(&sub_ctx).await {
                     results.push(ServiceDetectionResult {
                         service_name: module_name.clone(),
                         service_dir: module_dir,
                         detection,
+                        module_type: module_type.to_string(),
                     });
                 }
             }
@@ -204,12 +240,17 @@ async fn detect_multi_module_java(ctx: &ProjectContext) -> Result<Vec<ServiceDet
         for dir_name in &dirs {
             let sub_dir = ctx.dir_path.join(dir_name);
             if sub_dir.join("pom.xml").exists() || sub_dir.join("build.gradle").exists() {
+                let module_type = detect_module_type(dir_name);
+                if module_type == "common" {
+                    continue;
+                }
                 let sub_ctx = ProjectContext::new(sub_dir.clone());
                 if let Ok(Some(detection)) = detect_single_app(&sub_ctx).await {
                     results.push(ServiceDetectionResult {
                         service_name: dir_name.clone(),
                         service_dir: sub_dir,
                         detection,
+                        module_type: module_type.to_string(),
                     });
                 }
             }
