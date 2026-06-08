@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use tracing::info;
 use uuid::Uuid;
 use sea_orm::{EntityTrait, ActiveModelTrait, Set};

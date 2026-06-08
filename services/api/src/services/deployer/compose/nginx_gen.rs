@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::path::Path;
 use tracing::info;
 use crate::error::AppError;
@@ -53,12 +54,7 @@ pub fn generate_frontend_dockerfile(
     build_cmd: &str,
     output_dir: &str,
     frontend_port: u16,
-    api_prefix: &str,
-    gateway_service: &str,
-    gateway_port: u16,
 ) -> String {
-    let nginx_conf = generate_nginx_conf(frontend_port, api_prefix, gateway_service, gateway_port);
-
     format!(
         r#"FROM node:18-alpine AS builder
 WORKDIR /app

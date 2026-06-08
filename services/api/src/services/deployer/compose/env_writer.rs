@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::path::Path;
 use tracing::{info, warn};
 use crate::error::AppError;
