@@ -78,6 +78,10 @@ async fn detect_single_app(ctx: &ProjectContext) -> Result<Option<DetectionResul
         }
     }
 
+    if best_match.is_some() {
+        info!("检测到应用: {:?}, 置信度: {}", ctx.dir_path, best_confidence);
+    }
+
     Ok(best_match)
 }
 
@@ -119,23 +123,29 @@ async fn scan_dir_recursive(
         let sub_ctx = ProjectContext::new(ctx.dir_path.join(dir_name));
 
         // 检查子目录是否包含项目文件
-        let (sub_files, _) = match sub_ctx.list_dir(".").await {
+        let (sub_files, sub_dirs) = match sub_ctx.list_dir(".").await {
             Ok(r) => r,
             Err(_) => continue,
         };
 
         let has_pom = sub_files.contains(&"pom.xml".to_string());
         let has_pkg = sub_files.contains(&"package.json".to_string());
-        let has_src = sub_files.contains(&"src".to_string());
+        let has_src = sub_dirs.contains(&"src".to_string());  // src 是目录，在 dirs 中查找
+
+        info!("扫描目录: {}, has_pom={}, has_pkg={}, has_src={}, files={:?}, dirs={:?}", dir_name, has_pom, has_pkg, has_src, sub_files, sub_dirs);
 
         if has_pom && has_src {
             // 有 pom.xml 和 src/ 目录，认为是可部署服务
+            info!("检测到可部署服务: {}", dir_name);
             if let Ok(Some(detection)) = detect_single_app(&sub_ctx).await {
+                info!("服务 {} 检测成功: language={}", dir_name, detection.language);
                 results.push(ServiceDetectionResult {
                     service_name: dir_name.clone(),
                     service_dir: ctx.dir_path.join(dir_name),
                     detection,
                 });
+            } else {
+                info!("服务 {} 检测失败", dir_name);
             }
         } else if has_pom && !has_src {
             // 有 pom.xml 但没有 src/ 目录，认为是聚合模块，递归扫描
@@ -144,6 +154,7 @@ async fn scan_dir_recursive(
             results.extend(sub_results);
         } else if has_pkg {
             // 纯前端模块
+            info!("检测到前端模块: {}", dir_name);
             if let Ok(Some(detection)) = detect_single_app(&sub_ctx).await {
                 results.push(ServiceDetectionResult {
                     service_name: dir_name.clone(),
