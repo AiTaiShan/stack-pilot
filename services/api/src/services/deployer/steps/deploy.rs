@@ -1,8 +1,8 @@
 use tracing::{info, warn};
 use uuid::Uuid;
-use sea_orm::EntityTrait;
+use sea_orm::{EntityTrait, ActiveModelTrait, Set};
 use crate::error::AppError;
-use crate::models::deployment::{Entity as DeploymentEntity};
+use crate::models::deployment::{Entity as DeploymentEntity, ActiveModel as DeploymentActiveModel};
 use crate::services::deployer::compose::microservices::generate_microservices_compose;
 use crate::services::scanner::dependency::service_map::ExternalService;
 
@@ -52,18 +52,20 @@ pub async fn execute(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_else(|| vec![image_tag.to_string()]);
 
+    // 获取 repo_name
+    let repo_name = dep.git_url
+        .as_ref()
+        .and_then(|u| u.rsplit('/').next())
+        .unwrap_or("app")
+        .replace(".git", "")
+        .to_lowercase();
+
     match platform {
         "docker" | "local" => {
             // 检查是否需要生成微服务 compose（微服务项目总是覆盖）
             let compose_file = repo_dir.join("docker-compose.yml");
             if project_type == "microservices" || project_type == "microservices-with-frontend" || project_type == "spring-cloud" {
                 info!("生成微服务 docker-compose.yml");
-                let repo_name = dep.git_url
-                    .as_ref()
-                    .and_then(|u| u.rsplit('/').next())
-                    .unwrap_or("app")
-                    .replace(".git", "")
-                    .to_lowercase();
 
                 let external_services: Vec<ExternalService> = scan_result
                     .get("external_services")
@@ -135,20 +137,45 @@ pub async fn execute(
                     }
                 }
             }
+
+            // 获取 deploy_url 从运行的容器
+            info!("获取部署 URL...");
+            match get_deploy_url_from_containers(&repo_name, &scan_result).await {
+                Some(deploy_url) => {
+                    info!("部署 URL: {}", deploy_url);
+                    // 更新数据库
+                    if let Some(dep) = DeploymentEntity::find_by_id(deployment_id).one(&db).await.ok().flatten() {
+                        let mut am: DeploymentActiveModel = dep.into();
+                        am.deploy_url = Set(Some(deploy_url.clone()));
+                        am.update(&db).await.ok();
+                    }
+                }
+                None => {
+                    warn!("无法获取部署 URL，使用默认端口");
+                    let deploy_url = format!("http://localhost:{}", port);
+                    if let Some(dep) = DeploymentEntity::find_by_id(deployment_id).one(&db).await.ok().flatten() {
+                        let mut am: DeploymentActiveModel = dep.into();
+                        am.deploy_url = Set(Some(deploy_url.clone()));
+                        am.update(&db).await.ok();
+                    }
+                }
+            }
         }
         "k8s" => {
             info!("使用 Kubernetes 部署，镜像: {}", image_tag);
             let k8s_service = crate::services::deployer::k8s::K8sService::new(None);
-            let name = dep.git_url
-                .as_ref()
-                .and_then(|u| u.rsplit('/').next())
-                .unwrap_or("app")
-                .replace(".git", "")
-                .to_lowercase();
             let namespace = format!("stackpilot-{}", deployment_id);
             k8s_service.create_namespace(&namespace).await?;
-            k8s_service.create_deployment(&namespace, &name, image_tag, 1, port, None).await?;
-            k8s_service.create_service(&namespace, &name, port, port, "LoadBalancer").await?;
+            k8s_service.create_deployment(&namespace, &repo_name, image_tag, 1, port, None).await?;
+            k8s_service.create_service(&namespace, &repo_name, port, port, "LoadBalancer").await?;
+
+            // K8s 部署 URL
+            let deploy_url = format!("http://{}.{}", repo_name, namespace);
+            if let Some(dep) = DeploymentEntity::find_by_id(deployment_id).one(&db).await.ok().flatten() {
+                let mut am: DeploymentActiveModel = dep.into();
+                am.deploy_url = Set(Some(deploy_url.clone()));
+                am.update(&db).await.ok();
+            }
         }
         _ => {
             return Err(AppError::ValidationError(format!("不支持的部署平台: {}", platform)));
@@ -157,4 +184,55 @@ pub async fn execute(
 
     info!("部署完成");
     Ok(())
+}
+
+/// 从运行的容器获取部署 URL
+async fn get_deploy_url_from_containers(
+    repo_name: &str,
+    scan_result: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    // 1. 获取基础设施端口（数据库、缓存等）
+    let mut infra_ports = std::collections::HashSet::new();
+    if let Some(external_services) = scan_result.get("external_services").and_then(|v| v.as_array()) {
+        for svc in external_services {
+            let category = svc.get("category").and_then(|v| v.as_str()).unwrap_or("");
+            if category == "database" || category == "cache" || category == "mq" || category == "search" || category == "storage" {
+                if let Some(port) = svc.get("port").and_then(|v| v.as_u64()) {
+                    infra_ports.insert(port as u16);
+                }
+            }
+        }
+    }
+
+    // 2. 从运行的容器获取端口映射
+    let project_name = format!("stackpilot-{}", repo_name);
+    let output = tokio::process::Command::new("docker")
+        .args(["ps", "--filter", &format!("name={}", project_name), "--format", "{{.Names}}:{{.Ports}}"])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                if line.is_empty() {
+                    continue;
+                }
+                // 解析端口映射，格式如: 0.0.0.0:8080->8080/tcp
+                let port_regex = regex::Regex::new(r"0\.0\.0\.0:(\d+)->").ok()?;
+                for cap in port_regex.captures_iter(line) {
+                    if let Some(port_str) = cap.get(1) {
+                        if let Ok(port) = port_str.as_str().parse::<u16>() {
+                            // 过滤掉基础设施端口
+                            if !infra_ports.contains(&port) {
+                                return Some(format!("http://localhost:{}", port));
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
