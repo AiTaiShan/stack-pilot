@@ -77,6 +77,39 @@ pub async fn detect_structure(ctx: &ProjectContext) -> Result<ProjectStructure, 
     Ok(ProjectStructure::SingleApp)
 }
 
+/// 检测前端目录（用于升级项目类型为 *-with-frontend）
+///
+/// 扫描常见前端目录名：frontend, client, web, ui, app
+/// 判断依据：目录下有 package.json 或 index.html
+pub async fn detect_frontend_dir(ctx: &ProjectContext) -> Option<String> {
+    let frontend_candidates = vec![
+        "frontend", "client", "web", "ui", "app",
+        "web-app", "webapp", "fe", "admin",
+    ];
+
+    for name in &frontend_candidates {
+        let dir_path = ctx.dir_path.join(name);
+        if !dir_path.is_dir() {
+            continue;
+        }
+
+        // 检查是否有 package.json 或 index.html
+        let has_pkg_json = dir_path.join("package.json").exists();
+        let has_index_html = dir_path.join("index.html").exists();
+        let has_vite_config = dir_path.join("vite.config.ts").exists()
+            || dir_path.join("vite.config.js").exists();
+        let has_vue_config = dir_path.join("vue.config.js").exists();
+        let has_next_config = dir_path.join("next.config.js").exists()
+            || dir_path.join("next.config.ts").exists();
+
+        if has_pkg_json || has_index_html || has_vite_config || has_vue_config || has_next_config {
+            return Some(name.to_string());
+        }
+    }
+
+    None
+}
+
 /// 同步版本的结构检测（用于不支持 async 的场景）
 pub fn detect_structure_sync(repo_dir: &Path) -> ProjectStructure {
     let pom = repo_dir.join("pom.xml");

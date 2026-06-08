@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use std::path::PathBuf;
+use tracing::info;
 use crate::error::AppError;
 use super::rules::context::ProjectContext;
 use super::rules::structure::{ProjectStructure, detect_structure};
@@ -236,6 +237,19 @@ pub async fn detect(repo_dir: &PathBuf) -> Result<ScanResult, AppError> {
             let main_result = detect_single_app(&ctx).await?;
             ("single".to_string(), main_result, Vec::new())
         }
+    };
+
+    // Step 2b: 检测前端目录，升级项目类型
+    let project_type = if let Some(fe_dir) = super::rules::structure::detect_frontend_dir(&ctx).await {
+        info!("检测到前端目录: {}，升级项目类型", fe_dir);
+        match project_type.as_str() {
+            "microservices" => "microservices-with-frontend".to_string(),
+            "multi-module-java" | "spring-cloud" => "multi-module-java-with-frontend".to_string(),
+            "monorepo" => "monorepo".to_string(), // monorepo 已包含前端
+            _ => project_type,
+        }
+    } else {
+        project_type
     };
 
     // Step 3: 检测外部依赖
