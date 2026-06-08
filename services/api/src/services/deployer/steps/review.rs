@@ -297,7 +297,7 @@ async fn generate_microservices_dockerfiles(
         let svc_port = svc.get("port").and_then(|v| v.as_u64()).unwrap_or(8080) as u16;
         let svc_name = svc.get("name").and_then(|v| v.as_str()).unwrap_or(svc_dir);
         let svc_language = svc.get("language").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let svc_framework = svc.get("framework").and_then(|v| v.as_str()).unwrap_or("");
+        let _svc_framework = svc.get("framework").and_then(|v| v.as_str()).unwrap_or("");
 
         if svc_dir.is_empty() {
             continue;

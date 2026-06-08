@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 use uuid::Uuid;
 use sea_orm::{EntityTrait, ActiveModelTrait, Set, ColumnTrait, QueryFilter, QueryOrder};
 use tracing::{info, warn};
@@ -62,6 +62,7 @@ pub async fn execute_deployment(
     git_url: &str, branch: &str, platform: &str,
     cancel_rx: watch::Receiver<bool>, pause_rx: watch::Receiver<bool>,
     agent_client: Arc<AgentClient>,
+    review_notify: Arc<Notify>,
 ) -> Result<(), AppError> {
     let mut start_index = 0;
     let mut retry_count = 0;
@@ -77,7 +78,7 @@ pub async fn execute_deployment(
                 "clone" => crate::services::deployer::steps::clone::execute(db.clone(), deployment_id, git_url, branch).await,
                 "generate_review" => crate::services::deployer::steps::review::execute(db.clone(), deployment_id).await,
                 "build" => crate::services::deployer::steps::build::execute(db.clone(), deployment_id).await,
-                "env_review" => crate::services::deployer::steps::env_review::execute(db.clone(), deployment_id).await,
+                "env_review" => crate::services::deployer::steps::env_review::execute(db.clone(), deployment_id, &cancel_rx, review_notify.clone()).await,
                 "push" => crate::services::deployer::steps::push::execute(db.clone(), deployment_id).await,
                 "deploy" => crate::services::deployer::steps::deploy::execute(db.clone(), deployment_id, platform).await,
                 "configure" => crate::services::deployer::steps::configure::execute(db.clone(), deployment_id).await,
@@ -121,8 +122,10 @@ pub async fn execute_deployment(
                                 }
                             }
                             Err(diag_err) => {
-                                // 诊断失败，直接标记失败
+                                // 诊断失败，记录失败原因并标记失败
                                 warn!("AI 诊断失败: {}", diag_err);
+                                write_deployment_log_with_step(&db, deployment_id, "error",
+                                    &format!("AI 诊断服务不可用: {}\n原始错误: {}", diag_err, e), "diagnose").await.ok();
                                 fail_deployment(&db, deployment_id, &e.to_string()).await;
                                 cleanup_temp_dir(deployment_id).await;
                                 return Err(e);
@@ -247,6 +250,7 @@ async fn get_key_logs(db: &sea_orm::DatabaseConnection, deployment_id: Uuid, fai
     Ok(key_logs)
 }
 
+#[allow(dead_code)]
 struct DiagnoseResult {
     diagnosis: String,
     suggestions: Vec<String>,
@@ -299,6 +303,7 @@ pub async fn update_deployment_progress(db: &sea_orm::DatabaseConnection, id: Uu
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn write_deployment_log(db: &sea_orm::DatabaseConnection, deployment_id: Uuid, level: &str, message: &str) -> Result<(), AppError> {
     write_deployment_log_with_step(db, deployment_id, level, message, "").await
 }

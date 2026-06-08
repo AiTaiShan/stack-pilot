@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{RwLock, watch, Notify};
 use uuid::Uuid;
 use sea_orm::{EntityTrait, ActiveModelTrait, Set, ColumnTrait, QueryFilter};
 use tracing::{info, warn, error};
@@ -13,6 +13,7 @@ use crate::services::agent::AgentClient;
 pub struct DeploymentRuntime {
     pub cancel_tx: watch::Sender<bool>,
     pub pause_tx: watch::Sender<bool>,
+    pub review_notify: Arc<Notify>,
     pub handle: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -50,6 +51,7 @@ impl DeploymentStateManager {
     pub async fn create_deployment(&self, deployment_id: Uuid, git_url: String, branch: String, platform: String) -> Result<(), AppError> {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let (pause_tx, pause_rx) = watch::channel(false);
+        let review_notify = Arc::new(Notify::new());
         let dep = DeploymentEntity::find_by_id(deployment_id).one(&self.db).await
             .map_err(|e| AppError::DatabaseError(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("部署不存在".to_string()))?;
@@ -61,10 +63,11 @@ impl DeploymentStateManager {
         let db = self.db.clone();
         let agent_client = self.agent_client.clone();
         let active_map = self.active.clone();
+        let review_notify_clone = review_notify.clone();
         let handle = tokio::spawn(async move {
             let result = super::executor::execute_deployment(
                 db.clone(), deployment_id, &git_url, &branch, &platform,
-                cancel_rx, pause_rx, agent_client
+                cancel_rx, pause_rx, agent_client, review_notify_clone
             ).await;
             active_map.write().await.remove(&deployment_id);
             match result {
@@ -72,7 +75,7 @@ impl DeploymentStateManager {
                 Err(e) => error!("部署失败: {} - {}", deployment_id, e),
             }
         });
-        self.active.write().await.insert(deployment_id, DeploymentRuntime { cancel_tx, pause_tx, handle: Some(handle) });
+        self.active.write().await.insert(deployment_id, DeploymentRuntime { cancel_tx, pause_tx, review_notify, handle: Some(handle) });
         info!("部署已启动: {}", deployment_id);
         Ok(())
     }
@@ -110,6 +113,14 @@ impl DeploymentStateManager {
         am.status = Set(deployment::DeploymentStatus::Running);
         am.update(&self.db).await.ok();
         info!("部署已恢复: {}", id);
+        Ok(())
+    }
+
+    pub async fn confirm_env_review(&self, id: &Uuid) -> Result<(), AppError> {
+        let active = self.active.read().await;
+        let runtime = active.get(id).ok_or_else(|| AppError::NotFound("部署不在运行中".to_string()))?;
+        runtime.review_notify.notify_one();
+        info!("环境变量审核已确认: {}", id);
         Ok(())
     }
 

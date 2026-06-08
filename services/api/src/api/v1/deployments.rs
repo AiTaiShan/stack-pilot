@@ -21,6 +21,7 @@ pub struct DeploymentsState {
     pub manager: Arc<DeploymentStateManager>,
     pub db: sea_orm::DatabaseConnection,
     pub jwt_secret: String,
+    #[allow(dead_code)]
     pub agent_client: Arc<AgentClient>,
 }
 
@@ -431,26 +432,35 @@ pub async fn update_compose_file(
 pub async fn confirm_env_vars(
     State(state): State<DeploymentsState>,
     Path(id): Path<String>,
-    Json(payload): Json<ConfirmEnvVarsRequest>,
+    body: Option<Json<ConfirmEnvVarsRequest>>,
 ) -> Json<Value> {
     let uuid = match Uuid::parse_str(&id) {
         Ok(u) => u,
         Err(_) => return Json(json!({"code": 400, "message": "无效的部署 ID"})),
     };
 
+    let env_vars_map = body
+        .map(|j| j.0.env_vars)
+        .unwrap_or_default();
+
     match DeploymentEntity::find_by_id(uuid).one(&state.db).await {
         Ok(Some(dep)) => {
             let mut config = dep.config.clone().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
             if let serde_json::Value::Object(ref mut map) = config {
-                let env_json = serde_json::to_value(&payload.env_vars).unwrap_or(serde_json::Value::Null);
+                let env_json = serde_json::to_value(&env_vars_map).unwrap_or(serde_json::Value::Null);
                 map.insert("env_vars".to_string(), env_json);
+                map.insert("env_vars_confirmed".to_string(), serde_json::Value::Bool(true));
             }
             let mut am: deployment::ActiveModel = dep.into();
             am.config = Set(Some(config));
             am.status = Set(DeploymentStatus::Running);
             am.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
             match am.update(&state.db).await {
-                Ok(_) => Json(json!({"code": 200, "message": "环境变量已确认", "data": { "id": id } })),
+                Ok(_) => {
+                    // 通知阻塞的 env_review 步骤
+                    let _ = state.manager.confirm_env_review(&uuid).await;
+                    Json(json!({"code": 200, "message": "环境变量已确认", "data": { "id": id } }))
+                }
                 Err(e) => Json(json!({"code": 500, "message": format!("确认环境变量失败: {}", e)})),
             }
         }
