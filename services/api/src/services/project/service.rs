@@ -3,10 +3,23 @@ use sea_orm::{EntityTrait, QueryFilter, ColumnTrait, ActiveModelTrait, Set};
 use tracing::info;
 use serde::Serialize;
 use crate::error::AppError;
-use crate::models::project::{self, Entity as ProjectEntity, ActiveModel as ProjectActiveModel};
+use crate::models::project::{self, Entity as ProjectEntity, ActiveModel as ProjectActiveModel, Model as ProjectModel};
 
 pub struct ProjectService {
     db: sea_orm::DatabaseConnection,
+}
+
+fn to_project_info(p: ProjectModel) -> ProjectInfo {
+    ProjectInfo {
+        id: p.id.to_string(),
+        name: p.name,
+        git_url: p.git_url,
+        owner_id: p.owner_id.to_string(),
+        description: p.description,
+        default_branch: p.default_branch.unwrap_or_else(|| "main".to_string()),
+        created_at: p.created_at.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
+        updated_at: p.updated_at.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
+    }
 }
 
 impl ProjectService {
@@ -38,14 +51,7 @@ impl ProjectService {
 
         info!("项目创建成功: {}", result.name);
 
-        Ok(ProjectInfo {
-            id: result.id.to_string(),
-            name: result.name,
-            git_url: result.git_url,
-            owner_id: result.owner_id.to_string(),
-            description: result.description,
-            default_branch: result.default_branch.unwrap_or_else(|| "main".to_string()),
-        })
+        Ok(to_project_info(result))
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<ProjectInfo>, AppError> {
@@ -57,14 +63,7 @@ impl ProjectService {
             .await
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
-        Ok(project.map(|p| ProjectInfo {
-            id: p.id.to_string(),
-            name: p.name,
-            git_url: p.git_url,
-            owner_id: p.owner_id.to_string(),
-            description: p.description,
-            default_branch: p.default_branch.unwrap_or_else(|| "main".to_string()),
-        }))
+        Ok(project.map(to_project_info))
     }
 
     pub async fn list(&self, owner_id: Option<&str>) -> Result<Vec<ProjectInfo>, AppError> {
@@ -81,14 +80,7 @@ impl ProjectService {
             .await
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
-        Ok(projects.into_iter().map(|p| ProjectInfo {
-            id: p.id.to_string(),
-            name: p.name,
-            git_url: p.git_url,
-            owner_id: p.owner_id.to_string(),
-            description: p.description,
-            default_branch: p.default_branch.unwrap_or_else(|| "main".to_string()),
-        }).collect())
+        Ok(projects.into_iter().map(to_project_info).collect())
     }
 
     pub async fn update(
@@ -125,14 +117,7 @@ impl ProjectService {
 
         info!("项目更新成功: {}", result.id);
 
-        Ok(ProjectInfo {
-            id: result.id.to_string(),
-            name: result.name,
-            git_url: result.git_url,
-            owner_id: result.owner_id.to_string(),
-            description: result.description,
-            default_branch: result.default_branch.unwrap_or_else(|| "main".to_string()),
-        })
+        Ok(to_project_info(result))
     }
 
     pub async fn delete(&self, id: &str) -> Result<(), AppError> {
@@ -163,4 +148,6 @@ pub struct ProjectInfo {
     pub owner_id: String,
     pub description: Option<String>,
     pub default_branch: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }

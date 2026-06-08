@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "deploymentstatus")]
+#[serde(rename_all = "snake_case")]
 pub enum DeploymentStatus {
     #[sea_orm(string_value = "pending")]
     Pending,
@@ -26,6 +27,7 @@ pub enum DeploymentStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "deploymentstep")]
+#[serde(rename_all = "snake_case")]
 pub enum DeploymentStep {
     #[sea_orm(string_value = "clone")]
     Clone,
