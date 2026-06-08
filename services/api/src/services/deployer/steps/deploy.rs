@@ -50,7 +50,8 @@ pub async fn execute(
                 .map_err(|e| AppError::InternalError(format!("docker compose 启动失败: {}", e)))?;
 
             if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
+                let _stderr = String::from_utf8_lossy(&output.stderr);
+                info!("docker compose (新版) 失败，尝试旧版 docker-compose...");
                 // 回退到旧版 docker-compose
                 let output2 = tokio::process::Command::new("docker-compose")
                     .args(["up", "-d"])
@@ -61,8 +62,12 @@ pub async fn execute(
                     Ok(out) if out.status.success() => {
                         info!("docker-compose (旧版) 启动成功");
                     }
-                    _ => {
-                        return Err(AppError::InternalError(format!("docker compose 启动失败: {}", stderr)));
+                    Ok(out) => {
+                        let stderr2 = String::from_utf8_lossy(&out.stderr);
+                        return Err(AppError::InternalError(format!("docker-compose 启动失败: {}", stderr2)));
+                    }
+                    Err(e) => {
+                        return Err(AppError::InternalError(format!("docker-compose 命令执行失败: {}", e)));
                     }
                 }
             }

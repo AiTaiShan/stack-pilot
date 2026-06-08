@@ -45,11 +45,13 @@ pub async fn execute(
         .replace(".git", "")
         .to_lowercase();
 
-    let commit_hash = dep.commit_hash.as_deref().unwrap_or("latest");
-    let tag = format!("stackpilot/{}:{}", repo_name, &commit_hash[..8.min(commit_hash.len())]);
+    let commit_hash = dep.commit_hash.as_deref().filter(|s| !s.is_empty()).unwrap_or("latest");
+    let tag_len = 8.min(commit_hash.len());
+    let tag_suffix = if tag_len > 0 { &commit_hash[..tag_len] } else { "latest" };
+    let tag = format!("stackpilot/{}:{}", repo_name, tag_suffix);
 
-    // ── 1. 清理旧镜像 ──
-    cleanup_old_images(&repo_name).await;
+    // ── 1. 清理旧镜像（排除当前构建的 tag） ──
+    cleanup_old_images(&repo_name, &tag).await;
 
     // ── 2. Java 项目：先执行 Maven 构建 ──
     if language == "java" || project_type.contains("java") || project_type.contains("spring") {
@@ -75,7 +77,8 @@ pub async fn execute(
 }
 
 /// 清理旧的 Docker 镜像，防止磁盘空间膨胀
-async fn cleanup_old_images(repo_name: &str) {
+/// `exclude_tag` — 不删除的镜像 tag（当前即将构建的版本）
+async fn cleanup_old_images(repo_name: &str, exclude_tag: &str) {
     let image_prefix = format!("stackpilot/{}", repo_name);
 
     // 列出所有相关镜像
@@ -91,7 +94,10 @@ async fn cleanup_old_images(repo_name: &str) {
     match output {
         Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            let images: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+            let images: Vec<&str> = stdout.lines()
+                .filter(|l| !l.trim().is_empty())
+                .filter(|img| *img != exclude_tag)
+                .collect();
 
             if images.is_empty() {
                 info!("无旧镜像需要清理");

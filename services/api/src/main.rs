@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use config::AppConfig;
 use services::deployer::manager::DeploymentStateManager;
+use services::agent::AgentClient;
 use services::auth::AuthService;
 use services::project::ProjectService;
 use services::project::MemberService;
@@ -63,7 +64,8 @@ async fn main() {
     info!("数据库连接成功");
 
     // 创建服务实例
-    let deployment_manager = Arc::new(DeploymentStateManager::new(db.clone()));
+    let agent_client = Arc::new(AgentClient::new(&config.agent_service_url));
+    let deployment_manager = Arc::new(DeploymentStateManager::new(db.clone(), agent_client.clone()));
     let user_service = Arc::new(UserService::new(db.clone()));
     let auth_service = Arc::new(AuthService::new(&config.jwt_secret, config.jwt_expire_minutes, config.refresh_token_days, UserService::new(db.clone())));
     let project_service = Arc::new(ProjectService::new(db.clone()));
@@ -76,6 +78,7 @@ async fn main() {
         manager: deployment_manager,
         db: db.clone(),
         jwt_secret: config.jwt_secret.clone(),
+        agent_client,
     };
     let auth_state = AuthState {
         auth_service,

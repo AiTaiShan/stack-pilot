@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Tag, Space, message, Button, Popconfirm, Drawer } from 'antd'
+import { Table, Tag, Space, message, Button, Popconfirm, Drawer, Modal, Spin, Typography, List } from 'antd'
 import type { ColumnType } from 'antd/es/table/interface'
-import { StopOutlined, RedoOutlined, EyeOutlined } from '@ant-design/icons'
+import { StopOutlined, RedoOutlined, EyeOutlined, BugOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
 import client from '../api/client'
 import DeploymentProgress from '../components/DeploymentProgress'
 import EnvVarReviewModal from '../components/EnvVarReviewModal'
+
+const { Text, Paragraph, Title } = Typography
 
 const statusColors: Record<string, string> = {
   pending: 'default',
@@ -43,6 +45,11 @@ const Deployments: React.FC = () => {
   const [selectedDeployment, setSelectedDeployment] = useState<any>(null)
   const [envReviewOpen, setEnvReviewOpen] = useState(false)
   const [envReviewDeploymentId, setEnvReviewDeploymentId] = useState<string>('')
+
+  // 诊断相关状态
+  const [diagnoseVisible, setDiagnoseVisible] = useState(false)
+  const [diagnoseLoading, setDiagnoseLoading] = useState(false)
+  const [diagnoseResult, setDiagnoseResult] = useState<any>(null)
 
   const fetchDeployments = async () => {
     setLoading(true)
@@ -161,6 +168,48 @@ const Deployments: React.FC = () => {
     }
   }
 
+  // 查看诊断结果（从日志中获取，诊断是自动执行的）
+  const handleDiagnose = async (record: any) => {
+    setDiagnoseVisible(true)
+    setDiagnoseLoading(true)
+    setDiagnoseResult(null)
+    try {
+      // 从部署日志中获取诊断结果
+      const res = await client.get(`/deployments/${record.id}/logs`)
+      const logs = res.data.data?.items || []
+      const diagnoseLog = logs.find((log: any) => log.step === 'diagnose')
+
+      if (diagnoseLog) {
+        // 解析诊断日志内容
+        const message = diagnoseLog.message
+        const diagnosisMatch = message.match(/AI 诊断[：:]\s*(.+?)(?:\n建议|$)/s)
+        const suggestionsMatch = message.match(/建议[：:]\s*(.+?)$/s)
+
+        setDiagnoseResult({
+          step_name: record.current_step || '未知',
+          error_message: record.error_message || '未知错误',
+          diagnosis: diagnosisMatch ? diagnosisMatch[1].trim() : message,
+          suggestions: suggestionsMatch ? suggestionsMatch[1].split(';').map((s: string) => s.trim()) : [],
+          retryable: false
+        })
+      } else {
+        // 没有诊断日志，显示基本信息
+        setDiagnoseResult({
+          step_name: record.current_step || '未知',
+          error_message: record.error_message || '未知错误',
+          diagnosis: '暂无 AI 诊断结果，部署可能因代码或基础设施问题失败',
+          suggestions: ['检查部署日志获取详细错误信息', '确认代码无语法错误', '检查网络连接和资源可用性'],
+          retryable: false
+        })
+      }
+    } catch (error: any) {
+      message.error('获取诊断结果失败')
+      setDiagnoseVisible(false)
+    } finally {
+      setDiagnoseLoading(false)
+    }
+  }
+
   const columns: ColumnType<any>[] = [
     { title: '项目', dataIndex: 'project_name', key: 'project_name', width: 120 },
     { title: '部署ID', dataIndex: 'id', key: 'id', width: 100, ellipsis: true },
@@ -200,6 +249,11 @@ const Deployments: React.FC = () => {
               重试
             </Button>
           )}
+          {record.status === 'failed' && (
+            <Button type="link" size="small" icon={<BugOutlined />} style={{ color: '#722ed1' }} onClick={() => handleDiagnose(record)}>
+              分析
+            </Button>
+          )}
         </Space>
       )
     }
@@ -234,6 +288,89 @@ const Deployments: React.FC = () => {
         onClose={handleReviewClose}
         onConfirmed={handleReviewConfirmed}
       />
+
+      {/* 诊断结果弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <BugOutlined style={{ color: '#722ed1' }} />
+            <span>AI 故障诊断</span>
+          </Space>
+        }
+        open={diagnoseVisible}
+        onCancel={() => setDiagnoseVisible(false)}
+        footer={[
+          <Button key="close" onClick={() => setDiagnoseVisible(false)}>
+            关闭
+          </Button>,
+          diagnoseResult?.retryable && (
+            <Button key="retry" type="primary" onClick={() => {
+              setDiagnoseVisible(false)
+              // 找到对应的部署记录并重试
+              const dep = deployments.find(d => d.id === diagnoseResult?.deployment_id)
+              if (dep) handleRedeploy(dep)
+            }}>
+              重试部署
+            </Button>
+          )
+        ]}
+        width={600}
+      >
+        {diagnoseLoading ? (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 16 }}>正在分析部署失败原因...</div>
+          </div>
+        ) : diagnoseResult ? (
+          <div>
+            {/* 失败信息 */}
+            <div style={{ marginBottom: 16, padding: 12, background: '#fff2f0', borderRadius: 6, border: '1px solid #ffccc7' }}>
+              <Text strong>失败步骤: </Text>
+              <Tag color="red">{diagnoseResult.step_name}</Tag>
+              <br />
+              <Text strong>错误信息: </Text>
+              <Text type="danger">{diagnoseResult.error_message}</Text>
+            </div>
+
+            {/* 诊断结果 */}
+            <div style={{ marginBottom: 16 }}>
+              <Title level={5}>📋 诊断结果</Title>
+              <Paragraph>{diagnoseResult.diagnosis}</Paragraph>
+            </div>
+
+            {/* 修复建议 */}
+            {diagnoseResult.suggestions?.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <Title level={5}>💡 修复建议</Title>
+                <List
+                  size="small"
+                  dataSource={diagnoseResult.suggestions}
+                  renderItem={(item: string, index: number) => (
+                    <List.Item>
+                      <Text>{index + 1}. {item}</Text>
+                    </List.Item>
+                  )}
+                />
+              </div>
+            )}
+
+            {/* 是否可重试 */}
+            <div style={{ padding: 12, background: '#f6ffed', borderRadius: 6, border: '1px solid #b7eb8f' }}>
+              {diagnoseResult.retryable ? (
+                <Space>
+                  <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16 }} />
+                  <Text>此问题可以通过重试解决</Text>
+                </Space>
+              ) : (
+                <Space>
+                  <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />
+                  <Text>此问题需要手动修复后才能重试</Text>
+                </Space>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   )
 }

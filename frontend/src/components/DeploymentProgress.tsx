@@ -83,7 +83,13 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({
   const fetchLogs = async () => {
     try {
       const res = await client.get(`/deployments/${deploymentId}/logs`)
-      setLogs(res.data.data?.logs || [])
+      const items = res.data.data?.items || []
+      setLogs(items.map((item: any) => ({
+        timestamp: item.created_at,
+        level: item.level,
+        message: item.message,
+        step: item.step,
+      })))
     } catch (error) {
       console.error('获取日志失败:', error)
     }

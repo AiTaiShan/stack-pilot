@@ -7,6 +7,7 @@ use crate::services::scanner::dependency::service_map::ExternalService;
 pub fn generate_single_compose(
     _repo_name: &str,
     image_tag: &str,
+    app_port: u16,
     services: &[ExternalService],
 ) -> String {
     let mut compose = format!(
@@ -16,10 +17,10 @@ services:
   app:
     image: {}
     ports:
-      - "8080:8080"
+      - "{}:{}"
     restart: unless-stopped
 "#,
-        image_tag
+        image_tag, app_port, app_port
     );
 
     let mut volumes = Vec::new();

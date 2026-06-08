@@ -47,16 +47,26 @@ pub struct ReviewResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DiagnoseRequest {
-    pub error_message: String,
-    pub step_name: String,
+pub struct DeployDiagnoseRequest {
+    pub deployment_id: String,
+    pub failed_step: String,
     pub project_type: String,
+    pub language: String,
+    pub framework: String,
+    pub dockerfile_content: Option<String>,
+    pub compose_content: Option<String>,
     pub logs: Vec<String>,
+    pub retry_count: i32,
+    pub max_retries: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct DiagnosisResponse {
+pub struct DeployDiagnoseResponse {
     pub diagnosis: String,
     pub suggestions: Vec<String>,
-    pub retryable: bool,
+    pub failure_category: String,
+    pub fixable_by_agent: bool,
+    pub fixed_content: Option<String>,
+    pub fixed_file_type: Option<String>,
+    pub retry_count: i32,
 }

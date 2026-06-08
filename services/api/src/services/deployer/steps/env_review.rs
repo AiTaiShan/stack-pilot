@@ -110,7 +110,19 @@ pub async fn execute(
         return Ok(());
     }
 
-    match agent_client.review_env(project_info, env_vars).await {
+    // 对敏感值脱敏后发送给 Agent（密码、密钥等 key 包含敏感关键词时值替换为 ***）
+    let sensitive_keys = ["password", "secret", "token", "key", "credential", "auth", "api_key", "apikey"];
+    let sanitized_vars: HashMap<String, String> = env_vars.iter().map(|(k, v)| {
+        let lower = k.to_lowercase();
+        let is_sensitive = sensitive_keys.iter().any(|s| lower.contains(s));
+        if is_sensitive {
+            (k.clone(), "***".to_string())
+        } else {
+            (k.clone(), v.clone())
+        }
+    }).collect();
+
+    match agent_client.review_env(project_info, sanitized_vars).await {
         Ok(result) => {
             info!("环境变量审核结果: {}", result.status);
             for issue in &result.issues {
@@ -130,53 +142,44 @@ pub async fn execute(
 fn extract_env_from_compose(content: &str) -> HashMap<String, String> {
     let mut env_vars = HashMap::new();
 
-    // 简单解析 YAML 中的 environment 字段
-    // 支持两种格式：
-    //   environment:
-    //     KEY: VALUE
-    //   environment:
-    //     - KEY=VALUE
-    let mut in_environment = false;
-    let mut indent_level = 0;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        // 跳过空行和注释
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
+    let yaml: serde_yaml::Value = match serde_yaml::from_str(content) {
+        Ok(v) => v,
+        Err(e) => {
+            info!("解析 docker-compose.yml 失败: {}", e);
+            return env_vars;
         }
+    };
 
-        // 检测 environment 块的开始
-        if trimmed.starts_with("environment:") {
-            in_environment = true;
-            indent_level = line.len() - line.trim_start().len();
-            continue;
-        }
-
-        if in_environment {
-            let current_indent = line.len() - line.trim_start().len();
-            // 缩进回退说明 environment 块结束
-            if current_indent <= indent_level && !trimmed.is_empty() {
-                in_environment = false;
-                continue;
-            }
-
-            // 解析 KEY: VALUE 格式
-            if let Some((key, value)) = trimmed.split_once(':') {
-                let key = key.trim().to_string();
-                let value = value.trim().trim_matches('"').trim_matches('\'').to_string();
-                if !key.is_empty() && !key.contains(' ') {
-                    env_vars.insert(key, value);
-                }
-            }
-            // 解析 - KEY=VALUE 格式
-            else if trimmed.starts_with("- ") {
-                let item = trimmed[2..].trim();
-                if let Some((key, value)) = item.split_once('=') {
-                    let key = key.trim().to_string();
-                    let value = value.trim().trim_matches('"').trim_matches('\'').to_string();
-                    env_vars.insert(key, value);
+    // 遍历 services.*.environment
+    if let Some(services) = yaml.get("services").and_then(|v| v.as_mapping()) {
+        for (_svc_name, svc_def) in services {
+            if let Some(env) = svc_def.get("environment") {
+                match env {
+                    // environment 是 mapping: { KEY: VALUE }
+                    serde_yaml::Value::Mapping(map) => {
+                        for (k, v) in map {
+                            if let (serde_yaml::Value::String(key), serde_yaml::Value::String(val)) = (k, v) {
+                                env_vars.insert(key.clone(), val.clone());
+                            } else if let serde_yaml::Value::String(key) = k {
+                                // value 可能是数字等非字符串类型
+                                env_vars.insert(key.clone(), format!("{:?}", v));
+                            }
+                        }
+                    }
+                    // environment 是 sequence: [ "KEY=VALUE", ... ]
+                    serde_yaml::Value::Sequence(seq) => {
+                        for item in seq {
+                            if let serde_yaml::Value::String(s) = item {
+                                if let Some((key, value)) = s.split_once('=') {
+                                    env_vars.insert(
+                                        key.trim().to_string(),
+                                        value.trim().trim_matches('"').trim_matches('\'').to_string(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

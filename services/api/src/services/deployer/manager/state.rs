@@ -8,6 +8,7 @@ use tracing::{info, warn, error};
 
 use crate::error::AppError;
 use crate::models::deployment::{self, Entity as DeploymentEntity, ActiveModel as DeploymentActiveModel, DeploymentStatus};
+use crate::services::agent::AgentClient;
 
 pub struct DeploymentRuntime {
     pub cancel_tx: watch::Sender<bool>,
@@ -17,12 +18,17 @@ pub struct DeploymentRuntime {
 
 pub struct DeploymentStateManager {
     db: sea_orm::DatabaseConnection,
+    agent_client: Arc<AgentClient>,
     active: Arc<RwLock<HashMap<Uuid, DeploymentRuntime>>>,
 }
 
 impl DeploymentStateManager {
-    pub fn new(db: sea_orm::DatabaseConnection) -> Self {
-        Self { db, active: Arc::new(RwLock::new(HashMap::new())) }
+    pub fn new(db: sea_orm::DatabaseConnection, agent_client: Arc<AgentClient>) -> Self {
+        Self {
+            db,
+            agent_client,
+            active: Arc::new(RwLock::new(HashMap::new()))
+        }
     }
 
     pub async fn recover_on_startup(&self) -> Result<(), AppError> {
@@ -53,9 +59,13 @@ impl DeploymentStateManager {
         am.update(&self.db).await.ok();
 
         let db = self.db.clone();
+        let agent_client = self.agent_client.clone();
         let active_map = self.active.clone();
         let handle = tokio::spawn(async move {
-            let result = super::executor::execute_deployment(db.clone(), deployment_id, &git_url, &branch, &platform, cancel_rx, pause_rx).await;
+            let result = super::executor::execute_deployment(
+                db.clone(), deployment_id, &git_url, &branch, &platform,
+                cancel_rx, pause_rx, agent_client
+            ).await;
             active_map.write().await.remove(&deployment_id);
             match result {
                 Ok(()) => info!("部署完成: {}", deployment_id),

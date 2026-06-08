@@ -80,6 +80,8 @@ pub async fn detect_structure(ctx: &ProjectContext) -> Result<ProjectStructure, 
         };
         let has_project_file = sub_files.iter().any(|f| {
             f == "package.json" || f == "pom.xml" || f == "go.mod" || f == "Cargo.toml"
+                || f == "Gemfile" || f == "composer.json" || f == "requirements.txt"
+                || f == "build.gradle" || f == "build.gradle.kts"
         });
         if has_project_file {
             service_count += 1;
@@ -143,8 +145,22 @@ pub fn detect_structure_sync(repo_dir: &Path) -> ProjectStructure {
         }
     }
 
-    if repo_dir.join("packages").is_dir() || repo_dir.join("apps").is_dir() {
-        return ProjectStructure::Monorepo;
+    // Monorepo 检测（带子验证）
+    for dir_name in &["packages", "apps"] {
+        let dir = repo_dir.join(dir_name);
+        if dir.is_dir() {
+            if let Ok(sub_entries) = std::fs::read_dir(&dir) {
+                let has_project = sub_entries.flatten().any(|entry| {
+                    let p = entry.path();
+                    p.join("package.json").exists()
+                        || p.join("pom.xml").exists()
+                        || p.join("go.mod").exists()
+                });
+                if has_project {
+                    return ProjectStructure::Monorepo;
+                }
+            }
+        }
     }
 
     if let Ok(pkg) = std::fs::read_to_string(repo_dir.join("package.json")) {
@@ -153,6 +169,7 @@ pub fn detect_structure_sync(repo_dir: &Path) -> ProjectStructure {
         }
     }
 
+    // 微服务检测（与异步版本对齐，检查更多文件类型）
     if let Ok(entries) = std::fs::read_dir(repo_dir) {
         let mut count = 0;
         for entry in entries.flatten() {
@@ -161,6 +178,12 @@ pub fn detect_structure_sync(repo_dir: &Path) -> ProjectStructure {
                 if p.join("package.json").exists()
                     || p.join("pom.xml").exists()
                     || p.join("go.mod").exists()
+                    || p.join("Cargo.toml").exists()
+                    || p.join("Gemfile").exists()
+                    || p.join("composer.json").exists()
+                    || p.join("requirements.txt").exists()
+                    || p.join("build.gradle").exists()
+                    || p.join("build.gradle.kts").exists()
                 {
                     count += 1;
                 }

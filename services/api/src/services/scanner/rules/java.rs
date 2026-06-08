@@ -66,7 +66,16 @@ impl BaseRule for JavaRule {
         // ── 版本检测（三级回退） ──
         let version = if has_pom {
             if let Some(content) = ctx.read_text("pom.xml").await {
-                extract_java_version(&content)
+                extract_java_version_from_pom(&content)
+            } else {
+                None
+            }
+        } else if has_gradle {
+            // Gradle 项目：从 build.gradle 或 build.gradle.kts 提取版本
+            if let Some(content) = ctx.read_text("build.gradle").await {
+                extract_java_version_from_gradle(&content)
+            } else if let Some(content) = ctx.read_text("build.gradle.kts").await {
+                extract_java_version_from_gradle(&content)
             } else {
                 None
             }
@@ -137,10 +146,20 @@ fn detect_framework_from_gradle(content: &str) -> Option<String> {
 }
 
 /// 从 pom.xml 提取 Java 版本（三级回退：java.version → maven.compiler.source → maven.compiler.target）
-fn extract_java_version(content: &str) -> Option<String> {
+fn extract_java_version_from_pom(content: &str) -> Option<String> {
+    // 先从 <properties> 块中提取 java.version
     let re = Regex::new(r#"<java\.version>([^<]+)</java\.version>"#).ok()?;
     if let Some(caps) = re.captures(content) {
-        return Some(caps[1].trim().to_string());
+        let val = caps[1].trim();
+        // 如果是 ${propertyRef} 引用，尝试从 properties 中解析实际值
+        if val.starts_with("${") && val.ends_with('}') {
+            let prop_name = &val[2..val.len()-1];
+            let prop_re = Regex::new(&format!(r#"<{}>([^<]+)</{}>"#, prop_name, prop_name)).ok()?;
+            if let Some(prop_caps) = prop_re.captures(content) {
+                return Some(prop_caps[1].trim().to_string());
+            }
+        }
+        return Some(val.to_string());
     }
 
     let re = Regex::new(r#"<maven\.compiler\.source>([^<]+)</maven\.compiler\.source>"#).ok()?;
@@ -149,6 +168,29 @@ fn extract_java_version(content: &str) -> Option<String> {
     }
 
     let re = Regex::new(r#"<maven\.compiler\.target>([^<]+)</maven\.compiler\.target>"#).ok()?;
+    if let Some(caps) = re.captures(content) {
+        return Some(caps[1].trim().to_string());
+    }
+
+    None
+}
+
+/// 从 build.gradle / build.gradle.kts 提取 Java 版本
+fn extract_java_version_from_gradle(content: &str) -> Option<String> {
+    // sourceCompatibility = '17' 或 sourceCompatibility = "17"
+    let re = Regex::new(r#"(?i)sourceCompatibility\s*=\s*['"]?(\d+)['"]?"#).ok()?;
+    if let Some(caps) = re.captures(content) {
+        return Some(caps[1].trim().to_string());
+    }
+
+    // java { sourceCompatibility = JavaVersion.VERSION_17 }
+    let re = Regex::new(r#"(?i)JavaVersion\.VERSION_(\d+)"#).ok()?;
+    if let Some(caps) = re.captures(content) {
+        return Some(caps[1].trim().to_string());
+    }
+
+    // toolchain { languageVersion.set(JavaLanguageVersion.of(17)) }
+    let re = Regex::new(r#"(?i)JavaLanguageVersion\.of\((\d+)\)"#).ok()?;
     if let Some(caps) = re.captures(content) {
         return Some(caps[1].trim().to_string());
     }

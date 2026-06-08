@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use reqwest::Client;
+use std::time::Duration;
 use tracing::info;
 use crate::error::AppError;
 use super::types::*;
@@ -11,9 +12,14 @@ pub struct AgentClient {
 
 impl AgentClient {
     pub fn new(base_url: &str) -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(120))
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
             base_url: base_url.to_string(),
-            client: Client::new(),
+            client,
         }
     }
 
@@ -26,7 +32,6 @@ impl AgentClient {
             project_info,
             dockerfile_content,
         };
-
         self.post("/api/v1/review/dockerfile", &request).await
     }
 
@@ -39,7 +44,6 @@ impl AgentClient {
             project_info,
             compose_content,
         };
-
         self.post("/api/v1/review/compose", &request).await
     }
 
@@ -52,24 +56,15 @@ impl AgentClient {
             project_info,
             env_vars,
         };
-
         self.post("/api/v1/review/env", &request).await
     }
 
-    pub async fn diagnose_error(
+    /// 部署失败诊断（编排流程）
+    pub async fn deploy_diagnose(
         &self,
-        error_message: &str,
-        step_name: &str,
-        project_type: &str,
-        logs: &[String],
-    ) -> Result<DiagnosisResponse, AppError> {
-        let req = DiagnoseRequest {
-            error_message: error_message.to_string(),
-            step_name: step_name.to_string(),
-            project_type: project_type.to_string(),
-            logs: logs.to_vec(),
-        };
-        self.post("/api/v1/review/diagnose", &req).await
+        request: DeployDiagnoseRequest,
+    ) -> Result<DeployDiagnoseResponse, AppError> {
+        self.post("/api/v1/deploy/diagnose", &request).await
     }
 
     pub async fn health_check(&self) -> Result<bool, AppError> {

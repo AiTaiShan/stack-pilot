@@ -11,6 +11,7 @@ use sea_orm::{EntityTrait, ColumnTrait, QueryFilter, QueryOrder, ActiveModelTrai
 
 use crate::error::AppError;
 use crate::services::deployer::manager::DeploymentStateManager;
+use crate::services::agent::AgentClient;
 use crate::models::deployment::{self, Entity as DeploymentEntity, DeploymentStatus};
 use crate::models::deployment_log::{self, Entity as DeploymentLogEntity};
 use crate::utils::jwt::verify_token;
@@ -20,6 +21,7 @@ pub struct DeploymentsState {
     pub manager: Arc<DeploymentStateManager>,
     pub db: sea_orm::DatabaseConnection,
     pub jwt_secret: String,
+    pub agent_client: Arc<AgentClient>,
 }
 
 #[derive(Deserialize)]
@@ -268,6 +270,8 @@ pub async fn get_deployment_logs(
                     "id": l.id.to_string(),
                     "level": l.level,
                     "message": l.message,
+                    "step": l.step,
+                    "details": l.details,
                     "created_at": l.created_at.unwrap_or_default().format("%Y-%m-%dT%H:%M:%S%.fZ").to_string(),
                 })
             }).collect();
