@@ -79,6 +79,8 @@ pub async fn execute(
 
             let primary_tag = images.first().cloned().unwrap_or(tag);
             persist_image_tag(&db, deployment_id, &primary_tag).await?;
+            // 保存所有镜像 tag 到 config
+            persist_all_image_tags(&db, deployment_id, &images).await?;
             info!("微服务构建完成，共 {} 个镜像", images.len());
         }
         _ => {
@@ -282,6 +284,39 @@ async fn persist_image_tag(
     active.image_tag = Set(Some(image_tag.to_string()));
     active.update(db).await
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    Ok(())
+}
+
+/// 持久化所有镜像 tag 到 config（微服务项目）
+async fn persist_all_image_tags(
+    db: &sea_orm::DatabaseConnection,
+    deployment_id: Uuid,
+    images: &[String],
+) -> Result<(), AppError> {
+    if images.is_empty() {
+        return Ok(());
+    }
+
+    let dep = DeploymentEntity::find_by_id(deployment_id).one(db).await
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?
+        .ok_or_else(|| AppError::NotFound("部署不存在".to_string()))?;
+
+    let mut config = dep.config.as_ref()
+        .cloned()
+        .unwrap_or_default();
+
+    if let serde_json::Value::Object(ref mut map) = config {
+        let images_json = serde_json::to_value(images)
+            .unwrap_or(serde_json::Value::Array(vec![]));
+        map.insert("_all_images".to_string(), images_json);
+    }
+
+    let mut active: DeploymentActiveModel = dep.into();
+    active.config = Set(Some(config));
+    active.update(db).await
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    info!("已保存 {} 个镜像 tag 到 config", images.len());
     Ok(())
 }
 

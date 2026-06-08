@@ -1,8 +1,10 @@
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 use sea_orm::EntityTrait;
 use crate::error::AppError;
 use crate::models::deployment::{Entity as DeploymentEntity};
+use crate::services::deployer::compose::microservices::generate_microservices_compose;
+use crate::services::scanner::dependency::service_map::ExternalService;
 
 pub async fn execute(
     db: sea_orm::DatabaseConnection,
@@ -33,15 +35,77 @@ pub async fn execute(
     // 从 image_tag 字段读取镜像 tag（由 build 步骤写入）
     let image_tag = dep.image_tag.as_deref().unwrap_or("stackpilot/app:latest");
 
-    // 从 scan_result 读取端口
-    let port = config.get("scan_result")
-        .and_then(|s| s.get("port"))
+    // 从 scan_result 读取项目类型和端口
+    let scan_result = config.get("scan_result")
+        .and_then(|s| s.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let project_type = scan_result.get("project_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("single");
+    let port = scan_result.get("port")
         .and_then(|v| v.as_u64())
         .unwrap_or(8080) as u16;
 
+    // 读取所有镜像 tag（微服务项目）
+    let all_images: Vec<String> = config.get("_all_images")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_else(|| vec![image_tag.to_string()]);
+
     match platform {
         "docker" | "local" => {
+            // 检查是否需要生成微服务 compose（微服务项目总是覆盖）
+            let compose_file = repo_dir.join("docker-compose.yml");
+            if project_type == "microservices" || project_type == "microservices-with-frontend" || project_type == "spring-cloud" {
+                info!("生成微服务 docker-compose.yml");
+                let repo_name = dep.git_url
+                    .as_ref()
+                    .and_then(|u| u.rsplit('/').next())
+                    .unwrap_or("app")
+                    .replace(".git", "")
+                    .to_lowercase();
+
+                let external_services: Vec<ExternalService> = scan_result
+                    .get("external_services")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+
+                let compose_content = generate_microservices_compose(
+                    &repo_name,
+                    &all_images,
+                    &scan_result,
+                    &external_services,
+                );
+
+                tokio::fs::write(&compose_file, &compose_content).await
+                    .map_err(|e| AppError::InternalError(format!("写入 docker-compose.yml 失败: {}", e)))?;
+                info!("微服务 docker-compose.yml 已生成");
+            }
+
             info!("使用 docker-compose 部署，工作目录: {:?}", repo_dir);
+
+            // 预拉取外部镜像（避免 up 时超时）
+            info!("预拉取外部镜像...");
+            let pull_result = tokio::process::Command::new("docker")
+                .args(["compose", "pull"])
+                .current_dir(&repo_dir)
+                .output()
+                .await;
+
+            match pull_result {
+                Ok(out) if out.status.success() => {
+                    info!("镜像预拉取完成");
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    warn!("镜像预拉取失败，继续尝试启动: {}", stderr);
+                }
+                Err(e) => {
+                    warn!("镜像预拉取命令执行失败，继续尝试启动: {}", e);
+                }
+            }
+
+            // 启动服务
             let output = tokio::process::Command::new("docker")
                 .args(["compose", "up", "-d"])
                 .current_dir(&repo_dir)
@@ -50,7 +114,7 @@ pub async fn execute(
                 .map_err(|e| AppError::InternalError(format!("docker compose 启动失败: {}", e)))?;
 
             if !output.status.success() {
-                let _stderr = String::from_utf8_lossy(&output.stderr);
+                let stderr = String::from_utf8_lossy(&output.stderr);
                 info!("docker compose (新版) 失败，尝试旧版 docker-compose...");
                 // 回退到旧版 docker-compose
                 let output2 = tokio::process::Command::new("docker-compose")
