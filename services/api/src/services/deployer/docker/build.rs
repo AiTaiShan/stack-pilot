@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::info;
 use crate::error::AppError;
@@ -14,11 +15,23 @@ impl DockerService {
         }
     }
 
+    /// 构建 Docker 镜像
     pub async fn build_image(
         &self,
         path: &PathBuf,
         tag: &str,
         dockerfile: &str,
+    ) -> Result<String, AppError> {
+        self.build_image_with_args(path, tag, dockerfile, None).await
+    }
+
+    /// 构建 Docker 镜像（支持 build_args）
+    pub async fn build_image_with_args(
+        &self,
+        path: &PathBuf,
+        tag: &str,
+        dockerfile: &str,
+        build_args: Option<&HashMap<String, String>>,
     ) -> Result<String, AppError> {
         info!("构建 Docker 镜像: {} from {:?}", tag, path);
 
@@ -29,17 +42,25 @@ impl DockerService {
 
         let max_retries = 3u32;
         for attempt in 0..=max_retries {
+            let mut cmd = tokio::process::Command::new("docker");
+            cmd.arg("build")
+                .arg("-t")
+                .arg(tag)
+                .arg("-f")
+                .arg(dockerfile);
+
+            // 添加 build_args
+            if let Some(args) = build_args {
+                for (key, value) in args {
+                    cmd.arg("--build-arg").arg(format!("{}={}", key, value));
+                }
+            }
+
+            cmd.arg(".").current_dir(path);
+
             let output_result = tokio::time::timeout(
                 std::time::Duration::from_secs(600),
-                tokio::process::Command::new("docker")
-                    .arg("build")
-                    .arg("-t")
-                    .arg(tag)
-                    .arg("-f")
-                    .arg(dockerfile)
-                    .arg(".")
-                    .current_dir(path)
-                    .output(),
+                cmd.output(),
             )
             .await;
 
