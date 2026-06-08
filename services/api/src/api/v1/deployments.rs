@@ -295,19 +295,24 @@ pub async fn cancel_deployment(
         Err(_) => return Json(json!({"code": 400, "message": "无效的部署 ID"})),
     };
 
-    match state.manager.cancel_deployment(&uuid).await {
-        Ok(()) => {
-            // 更新数据库状态
-            if let Ok(Some(dep)) = DeploymentEntity::find_by_id(uuid).one(&state.db).await {
-                let mut am: deployment::ActiveModel = dep.into();
-                am.status = Set(DeploymentStatus::Cancelled);
-                am.completed_at = Set(Some(chrono::Utc::now().naive_utc()));
-                am.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
-                am.update(&state.db).await.ok();
-            }
+    // 尝试发送取消信号（如果部署在 active_deployments 中）
+    let signal_sent = state.manager.cancel_deployment(&uuid).await.is_ok();
+
+    // 无论信号是否发送成功，都更新数据库状态
+    if let Ok(Some(dep)) = DeploymentEntity::find_by_id(uuid).one(&state.db).await {
+        let mut am: deployment::ActiveModel = dep.into();
+        am.status = Set(DeploymentStatus::Cancelled);
+        am.completed_at = Set(Some(chrono::Utc::now().naive_utc()));
+        am.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
+        am.update(&state.db).await.ok();
+
+        if signal_sent {
             Json(json!({"code": 200, "message": "部署已取消", "data": { "id": id } }))
+        } else {
+            Json(json!({"code": 200, "message": "部署已取消（进程已结束）", "data": { "id": id } }))
         }
-        Err(e) => Json(json!({"code": 404, "message": format!("取消部署失败: {}", e)})),
+    } else {
+        Json(json!({"code": 404, "message": "部署不存在"}))
     }
 }
 
