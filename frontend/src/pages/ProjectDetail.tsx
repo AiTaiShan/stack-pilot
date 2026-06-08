@@ -132,16 +132,25 @@ const ProjectDetail: React.FC = () => {
   }
 
   const handleDeploy = async (values: { branch: string; platform: string }) => {
+    console.log('handleDeploy called, project:', project)
+    if (!project?.git_url) {
+      message.error('项目 Git URL 不存在，请先编辑项目')
+      return
+    }
     try {
-      await client.post('/deployments', {
+      const payload = {
         project_id: id,
         git_url: project.git_url,
         branch: values.branch,
         platform: values.platform,
-      })
+      }
+      console.log('Creating deployment with payload:', payload)
+      await client.post('/deployments', payload)
       message.success('部署已触发')
       setDeployModalVisible(false)
+      fetchData()
     } catch (error: any) {
+      console.error('Deploy error:', error)
       message.error(error.response?.data?.detail || '部署失败')
     }
   }
@@ -173,16 +182,25 @@ const ProjectDetail: React.FC = () => {
   }
 
   const handleRedeploy = async (record: any) => {
+    console.log('handleRedeploy called, record:', record)
+    console.log('project:', project)
+    if (!project?.git_url) {
+      message.error('项目 Git URL 不存在')
+      return
+    }
     try {
-      await client.post('/deployments', {
+      const payload = {
         project_id: id,
         git_url: project.git_url,
         branch: record.branch,
         platform: record.platform,
-      })
+      }
+      console.log('Redeploy payload:', payload)
+      await client.post('/deployments', payload)
       message.success('重新部署已触发')
       fetchData()
     } catch (error: any) {
+      console.error('Redeploy error:', error)
       message.error(error.response?.data?.detail || '重新部署失败')
     }
   }

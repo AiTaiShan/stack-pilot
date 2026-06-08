@@ -155,9 +155,19 @@ const Deployments: React.FC = () => {
 
   const handleRedeploy = async (record: any) => {
     try {
+      // 如果部署记录没有 git_url，从项目获取
+      let gitUrl = record.git_url
+      if (!gitUrl && record.project_id) {
+        const projectRes = await client.get(`/projects/${record.project_id}`)
+        gitUrl = projectRes.data.data?.git_url
+      }
+      if (!gitUrl) {
+        message.error('无法获取项目 Git URL')
+        return
+      }
       await client.post('/deployments', {
         project_id: record.project_id,
-        git_url: record.git_url,
+        git_url: gitUrl,
         branch: record.branch,
         platform: record.platform,
       })
@@ -293,6 +303,32 @@ const Deployments: React.FC = () => {
         width={600}
         open={drawerVisible}
         onClose={() => setDrawerVisible(false)}
+        extra={
+          selectedDeployment?.status === 'failed' && (
+            <Space>
+              <Button
+                type="primary"
+                icon={<BugOutlined />}
+                style={{ background: '#722ed1' }}
+                onClick={() => {
+                  setDrawerVisible(false)
+                  handleDiagnose(selectedDeployment)
+                }}
+              >
+                AI 诊断
+              </Button>
+              <Button
+                icon={<RedoOutlined />}
+                onClick={() => {
+                  setDrawerVisible(false)
+                  handleRedeploy(selectedDeployment)
+                }}
+              >
+                重试
+              </Button>
+            </Space>
+          )
+        }
       >
         {selectedDeployment && (
           <DeploymentProgress
@@ -330,8 +366,15 @@ const Deployments: React.FC = () => {
             <Button key="retry" type="primary" onClick={() => {
               setDiagnoseVisible(false)
               // 找到对应的部署记录并重试
+              console.log('Retry clicked, diagnoseResult:', diagnoseResult)
+              console.log('deployments:', deployments)
               const dep = deployments.find(d => d.id === diagnoseResult?.deployment_id)
-              if (dep) handleRedeploy(dep)
+              console.log('Found deployment:', dep)
+              if (dep) {
+                handleRedeploy(dep)
+              } else {
+                message.error('未找到对应的部署记录')
+              }
             }}>
               重试部署
             </Button>
