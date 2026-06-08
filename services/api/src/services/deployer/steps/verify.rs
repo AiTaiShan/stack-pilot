@@ -34,7 +34,7 @@ pub async fn execute(
         .to_lowercase();
 
     match dep.platform.as_str() {
-        "docker" => {
+        "docker" | "local" => {
             // 用 docker compose ps 检查容器状态
             let output = tokio::process::Command::new("docker")
                 .args(["compose", "ps", "--format", "json"])

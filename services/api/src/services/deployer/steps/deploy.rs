@@ -40,7 +40,7 @@ pub async fn execute(
         .unwrap_or(8080) as u16;
 
     match platform {
-        "docker" => {
+        "docker" | "local" => {
             info!("使用 docker-compose 部署，工作目录: {:?}", repo_dir);
             let output = tokio::process::Command::new("docker")
                 .args(["compose", "up", "-d"])

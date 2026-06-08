@@ -27,7 +27,7 @@ pub async fn execute(
     let repo_dir = std::path::PathBuf::from(repo_dir_str);
 
     match dep.platform.as_str() {
-        "docker" => {
+        "docker" | "local" => {
             let env_path = repo_dir.join(".env");
             if env_path.exists() {
                 info!(".env 文件已就绪: {:?}", env_path);

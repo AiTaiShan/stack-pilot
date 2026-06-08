@@ -210,8 +210,8 @@ async fn scan_config_placeholders(repo_dir: &std::path::Path) -> HashMap<String,
 
     let config_extensions = [".properties", ".yml", ".yaml", ".env"];
 
-    // Spring 占位符模式: ${VAR_NAME} 或 ${VAR_NAME:default}
-    let re_placeholder = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::[^}]*)?\}").ok();
+    // Spring 占位符模式: ${VAR_NAME} 或 ${VAR_NAME:default}（支持点号如 spring.profiles.active）
+    let re_placeholder = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_.]*)(?::[^}]*)?\}").ok();
     // 待填写模式: CHANGE_ME, TODO, xxx, your_xxx
     let re_todo = Regex::new(r"(?i)(CHANGE_ME|TODO|xxx|your_\w+)").ok();
     // 连接串中的占位符: jdbc:mysql://localhost:3306/db 中的密码等
