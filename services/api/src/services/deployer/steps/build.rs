@@ -61,6 +61,8 @@ pub async fn execute(
             // 持久化第一个镜像 tag（兼容单镜像字段）
             let primary_tag = images.first().cloned().unwrap_or(tag);
             persist_image_tag(&db, deployment_id, &primary_tag).await?;
+            // 保存所有镜像 tag 到 config
+            persist_all_image_tags(&db, deployment_id, &images).await?;
             info!("多模块构建完成，共 {} 个镜像", images.len());
         }
         "microservices" | "microservices-with-frontend" => {
@@ -132,42 +134,53 @@ async fn build_multi_module_images(
             continue;
         }
 
-        let target_dir = repo_dir.join(svc_dir).join("target");
-        if !target_dir.exists() {
-            info!("模块 {} 无 target 目录，跳过", svc_name);
+        let svc_path = repo_dir.join(svc_dir);
+        if !svc_path.exists() {
+            info!("模块 {} 目录不存在，跳过", svc_name);
             continue;
         }
 
-        // 查找可执行 jar（排除 sources/javadoc/tests）
-        let jar_file = find_executable_jar(&target_dir);
-        let jar_file = match jar_file {
-            Some(f) => f,
-            None => {
-                info!("模块 {} 无可执行 jar，跳过（可能是 library）", svc_name);
-                continue;
-            }
-        };
+        // 检查或生成 Dockerfile
+        let dockerfile_path = svc_path.join("Dockerfile");
+        let target_dir = svc_path.join("target");
 
-        // 写入模块级 Dockerfile（指定具体 jar 文件名）
-        let dockerfile_path = repo_dir.join(svc_dir).join("Dockerfile");
-        let dockerfile_content = format!(
-            r#"FROM eclipse-temurin:17-jre-alpine
+        if !dockerfile_path.exists() {
+            // 如果没有 Dockerfile，检查是否有 target 目录和 jar 文件
+            if target_dir.exists() {
+                if let Some(jar_file) = find_executable_jar(&target_dir) {
+                    // 有可执行 jar，生成指定 jar 名的 Dockerfile
+                    let dockerfile_content = format!(
+                        r#"FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 COPY target/{jar} app.jar
 EXPOSE {port}
 CMD ["java", "-jar", "app.jar"]
 "#,
-            jar = jar_file,
-            port = svc_port
-        );
-        if let Err(e) = tokio::fs::write(&dockerfile_path, &dockerfile_content).await {
-            info!("模块 {} Dockerfile 写入失败: {}", svc_name, e);
-            continue;
+                        jar = jar_file,
+                        port = svc_port
+                    );
+                    let _ = tokio::fs::write(&dockerfile_path, &dockerfile_content).await;
+                } else {
+                    // 无可执行 jar，生成通用 Dockerfile（使用通配符）
+                    let dockerfile_content = format!(
+                        r#"FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+COPY target/*.jar app.jar
+EXPOSE {port}
+CMD ["java", "-jar", "app.jar"]
+"#,
+                        port = svc_port
+                    );
+                    let _ = tokio::fs::write(&dockerfile_path, &dockerfile_content).await;
+                }
+            } else {
+                info!("模块 {} 无 target 目录且无 Dockerfile，跳过", svc_name);
+                continue;
+            }
         }
 
         // 构建镜像
         let image_tag = format!("stackpilot/{}-{}:{}", repo_name, svc_name, tag_suffix);
-        let svc_path = repo_dir.join(svc_dir);
         match docker_service.build_image(&svc_path, &image_tag, "Dockerfile").await {
             Ok(_) => {
                 info!("模块 {} 镜像构建完成: {}", svc_name, image_tag);

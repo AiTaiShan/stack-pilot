@@ -68,7 +68,8 @@ pub async fn execute(
                 info!("生成微服务 docker-compose.yml");
 
                 let external_services: Vec<ExternalService> = scan_result
-                    .get("external_services")
+                    .get("dependencies")
+                    .and_then(|d| d.get("external_services"))
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
 

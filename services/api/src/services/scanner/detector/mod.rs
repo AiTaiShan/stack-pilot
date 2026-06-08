@@ -83,12 +83,39 @@ async fn detect_single_app(ctx: &ProjectContext) -> Result<Option<DetectionResul
 
 /// 检测微服务架构中的各个子服务
 async fn detect_microservices(ctx: &ProjectContext) -> Result<Vec<ServiceDetectionResult>, AppError> {
+    // 跳过的目录
+    let skip_dirs: Vec<&str> = vec![
+        ".git", "node_modules", "target", ".mvn", "__pycache__",
+        "dist", "build", ".idea", ".vscode", ".settings",
+        "docs", "test", "tests", "sql", "bin", "script",
+        "docker", "deploy", "resource", "resources",
+    ];
+
+    let results = scan_dir_recursive(ctx, &skip_dirs, 0, 3).await?;
+    Ok(results)
+}
+
+/// 递归扫描目录，支持聚合模块
+async fn scan_dir_recursive(
+    ctx: &ProjectContext,
+    skip_dirs: &[&str],
+    depth: u32,
+    max_depth: u32,
+) -> Result<Vec<ServiceDetectionResult>, AppError> {
+    if depth > max_depth {
+        return Ok(Vec::new());
+    }
+
     let (_, dirs) = ctx.list_dir(".").await
         .map_err(|e| AppError::InternalError(format!("读取项目目录失败: {}", e)))?;
 
     let mut results = Vec::new();
 
     for dir_name in &dirs {
+        if skip_dirs.contains(&dir_name.as_str()) || dir_name.starts_with('.') {
+            continue;
+        }
+
         let sub_ctx = ProjectContext::new(ctx.dir_path.join(dir_name));
 
         // 检查子目录是否包含项目文件
@@ -97,13 +124,26 @@ async fn detect_microservices(ctx: &ProjectContext) -> Result<Vec<ServiceDetecti
             Err(_) => continue,
         };
 
-        let has_project_file = sub_files.iter().any(|f| {
-            f == "package.json" || f == "pom.xml" || f == "go.mod"
-                || f == "Cargo.toml" || f == "Gemfile" || f == "composer.json"
-                || f == "requirements.txt" || f == "build.gradle"
-        });
+        let has_pom = sub_files.contains(&"pom.xml".to_string());
+        let has_pkg = sub_files.contains(&"package.json".to_string());
+        let has_src = sub_files.contains(&"src".to_string());
 
-        if has_project_file {
+        if has_pom && has_src {
+            // 有 pom.xml 和 src/ 目录，认为是可部署服务
+            if let Ok(Some(detection)) = detect_single_app(&sub_ctx).await {
+                results.push(ServiceDetectionResult {
+                    service_name: dir_name.clone(),
+                    service_dir: ctx.dir_path.join(dir_name),
+                    detection,
+                });
+            }
+        } else if has_pom && !has_src {
+            // 有 pom.xml 但没有 src/ 目录，认为是聚合模块，递归扫描
+            info!("递归扫描聚合模块: {}", dir_name);
+            let sub_results = Box::pin(scan_dir_recursive(&sub_ctx, skip_dirs, depth + 1, max_depth)).await?;
+            results.extend(sub_results);
+        } else if has_pkg {
+            // 纯前端模块
             if let Ok(Some(detection)) = detect_single_app(&sub_ctx).await {
                 results.push(ServiceDetectionResult {
                     service_name: dir_name.clone(),
