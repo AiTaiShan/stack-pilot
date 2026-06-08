@@ -30,6 +30,7 @@ pub struct CreateProjectRequest {
 pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub default_branch: Option<String>,
 }
 
 fn validate_git_url(url: &str) -> Result<(), AppError> {
@@ -135,6 +136,7 @@ pub async fn update_project(
         &id,
         payload.name.as_deref(),
         payload.description.as_deref(),
+        payload.default_branch.as_deref(),
     ).await {
         Ok(project) => Json(json!({
             "code": 200,
@@ -171,7 +173,13 @@ pub async fn get_project_branches(
     match state.project_service.get(&id).await {
         Ok(Some(project)) => {
             match list_remote_branches(&project.git_url).await {
-                Ok(branches) => Json(json!({"code": 200, "data": branches})),
+                Ok(branches) => Json(json!({
+                    "code": 200,
+                    "data": {
+                        "branches": branches,
+                        "default_branch": project.default_branch
+                    }
+                })),
                 Err(e) => Json(json!({"code": 500, "message": e.to_string()})),
             }
         }

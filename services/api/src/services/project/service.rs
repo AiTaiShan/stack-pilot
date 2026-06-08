@@ -96,6 +96,7 @@ impl ProjectService {
         id: &str,
         name: Option<&str>,
         description: Option<&str>,
+        default_branch: Option<&str>,
     ) -> Result<ProjectInfo, AppError> {
         let uuid = Uuid::parse_str(id)
             .map_err(|e| AppError::ValidationError(format!("无效的项目 ID: {}", e)))?;
@@ -113,6 +114,9 @@ impl ProjectService {
         }
         if let Some(d) = description {
             active_model.description = Set(Some(d.to_string()));
+        }
+        if let Some(b) = default_branch {
+            active_model.default_branch = Set(Some(b.to_string()));
         }
 
         let result = active_model.update(&self.db)
