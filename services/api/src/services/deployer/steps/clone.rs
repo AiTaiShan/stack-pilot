@@ -36,7 +36,7 @@ pub async fn execute(
         scan_result.project_type, scan_result.language, scan_result.framework, scan_result.port
     );
 
-    // 4. 持久化 ScanResult 到 deployment.config
+    // 4. 持久化 ScanResult 到 deployment.config（完整依赖信息）
     let scan_config = serde_json::json!({
         "scan_result": {
             "project_type": scan_result.project_type,
@@ -48,6 +48,7 @@ pub async fn execute(
                 "external_services": scan_result.dependencies.external_services,
                 "service_versions": scan_result.dependencies.service_versions,
                 "app_port": scan_result.dependencies.app_port,
+                "database_init": scan_result.dependencies.database_init,
             },
         },
         "_repo_dir": repo_dir.to_string_lossy(),

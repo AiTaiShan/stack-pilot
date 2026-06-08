@@ -44,8 +44,25 @@ pub async fn detect_structure(ctx: &ProjectContext) -> Result<ProjectStructure, 
         AppError::InternalError(format!("读取项目根目录失败: {}", e))
     })?;
 
-    if dirs.iter().any(|d| d == "packages" || d == "apps") {
-        return Ok(ProjectStructure::Monorepo);
+    // 验证 packages/apps 目录下确实有项目文件（避免误匹配非项目目录）
+    for d in &dirs {
+        if d == "packages" || d == "apps" {
+            let sub_dir = ctx.dir_path.join(d);
+            if sub_dir.is_dir() {
+                // 检查子目录下是否有 package.json 等项目文件
+                if let Ok(sub_entries) = std::fs::read_dir(&sub_dir) {
+                    let has_project = sub_entries.flatten().any(|entry| {
+                        let p = entry.path();
+                        p.join("package.json").exists()
+                            || p.join("pom.xml").exists()
+                            || p.join("go.mod").exists()
+                    });
+                    if has_project {
+                        return Ok(ProjectStructure::Monorepo);
+                    }
+                }
+            }
+        }
     }
 
     if let Some(pkg) = ctx.read_text("package.json").await {

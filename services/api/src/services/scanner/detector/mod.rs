@@ -246,7 +246,8 @@ pub async fn detect(repo_dir: &PathBuf) -> Result<ScanResult, AppError> {
             "microservices" => "microservices-with-frontend".to_string(),
             "multi-module-java" | "spring-cloud" => "multi-module-java-with-frontend".to_string(),
             "monorepo" => "monorepo".to_string(), // monorepo 已包含前端
-            _ => project_type,
+            "single" => "single-with-frontend".to_string(),
+            other => other.to_string(),
         }
     } else {
         project_type

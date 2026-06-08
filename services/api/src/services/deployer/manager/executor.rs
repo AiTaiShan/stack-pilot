@@ -55,9 +55,9 @@ pub async fn execute_deployment(
         };
 
         match result {
-            Ok(()) => { write_deployment_log(&db, deployment_id, "info", &format!("步骤完成: {}", step)).await?; }
+            Ok(()) => { write_deployment_log_with_step(&db, deployment_id, "info", &format!("步骤完成: {}", step), step).await?; }
             Err(e) => {
-                write_deployment_log(&db, deployment_id, "error", &format!("步骤失败: {} - {}", step, e)).await?;
+                write_deployment_log_with_step(&db, deployment_id, "error", &format!("步骤失败: {} - {}", step, e), step).await?;
                 fail_deployment(&db, deployment_id, &e.to_string()).await;
                 return Err(e);
             }
@@ -99,14 +99,19 @@ pub async fn update_deployment_progress(db: &sea_orm::DatabaseConnection, id: Uu
 }
 
 pub async fn write_deployment_log(db: &sea_orm::DatabaseConnection, deployment_id: Uuid, level: &str, message: &str) -> Result<(), AppError> {
+    write_deployment_log_with_step(db, deployment_id, level, message, "").await
+}
+
+pub async fn write_deployment_log_with_step(db: &sea_orm::DatabaseConnection, deployment_id: Uuid, level: &str, message: &str, step: &str) -> Result<(), AppError> {
     use crate::models::deployment_log::ActiveModel as LogActiveModel;
+    let step_value = if step.is_empty() { None } else { Some(step.to_string()) };
     LogActiveModel {
         id: Set(Uuid::new_v4()),
         deployment_id: Set(deployment_id),
         level: Set(level.to_string()),
         message: Set(message.to_string()),
         details: Set(None),
-        step: Set(None),
+        step: Set(step_value),
         created_at: Set(Some(chrono::Utc::now().naive_utc())),
     }.insert(db).await.map_err(|e| AppError::DatabaseError(e.to_string()))?;
     Ok(())

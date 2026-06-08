@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 use tracing::info;
 use crate::error::AppError;
-use crate::services::scanner::dependency::ExternalService;
+use crate::services::scanner::dependency::service_map::ExternalService;
 
 pub fn generate_single_compose(
     _repo_name: &str,
@@ -22,6 +22,8 @@ services:
         image_tag
     );
 
+    let mut volumes = Vec::new();
+
     for service in services {
         match service.category.as_str() {
             "database" => {
@@ -35,15 +37,13 @@ services:
       - {}_data:/var/lib/{}-data
     restart: unless-stopped
 "#,
-                    service.name,
-                    service.image,
-                    service.default_port,
-                    service.default_port,
-                    service.name,
-                    service.name
+                    service.name, service.image, service.default_port, service.default_port,
+                    service.name, service.name
                 ));
+                volumes.push(format!("{}_data", service.name));
             }
-            "cache" => {
+            "cache" | "search" | "storage" | "monitoring" | "registry" | "gateway"
+            | "auth" | "secrets" | "scheduler" | "testing" | "rpc" | "messagequeue" => {
                 compose.push_str(&format!(
                     r#"
   {}:
@@ -55,7 +55,8 @@ services:
                     service.name, service.image, service.default_port, service.default_port
                 ));
             }
-            "messagequeue" => {
+            _ => {
+                // 未知类别也生成基础配置
                 compose.push_str(&format!(
                     r#"
   {}:
@@ -67,14 +68,13 @@ services:
                     service.name, service.image, service.default_port, service.default_port
                 ));
             }
-            _ => {}
         }
     }
 
-    compose.push_str("\nvolumes:\n");
-    for service in services {
-        if service.category == "database" {
-            compose.push_str(&format!("  {}_data:\n", service.name));
+    if !volumes.is_empty() {
+        compose.push_str("\nvolumes:\n");
+        for vol in &volumes {
+            compose.push_str(&format!("  {}:\n", vol));
         }
     }
 
