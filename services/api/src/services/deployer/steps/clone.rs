@@ -39,10 +39,15 @@ pub async fn execute(
     // 4. 持久化 ScanResult 到 deployment.config（完整依赖信息 + services）
     // 手动序列化 services（ServiceDetectionResult 未实现 Serialize）
     let services_json: Vec<serde_json::Value> = scan_result.services.iter().map(|s| {
+        // 计算相对于 repo_dir 的路径
+        let relative_dir = s.service_dir.strip_prefix(&repo_dir)
+            .unwrap_or(&s.service_dir)
+            .to_string_lossy()
+            .to_string();
         serde_json::json!({
             "name": s.service_name,
-            "dir": s.service_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-            "type": "service",
+            "dir": relative_dir,
+            "type": s.module_type,
             "language": s.detection.language,
             "framework": s.detection.framework,
             "port": s.detection.port,
