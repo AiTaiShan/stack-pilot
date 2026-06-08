@@ -185,21 +185,27 @@ const Deployments: React.FC = () => {
         const diagnosisMatch = message.match(/AI 诊断[：:]\s*(.+?)(?:\n建议|$)/s)
         const suggestionsMatch = message.match(/建议[：:]\s*(.+?)$/s)
 
+        // 判断是否可重试（网络问题和基础设施问题可以重试）
+        const retryable = message.includes('network_error') || message.includes('infra_error') ||
+                         message.includes('超时') || message.includes('网络') || message.includes('重试')
+
         setDiagnoseResult({
+          deployment_id: record.id,
           step_name: record.current_step || '未知',
           error_message: record.error_message || '未知错误',
           diagnosis: diagnosisMatch ? diagnosisMatch[1].trim() : message,
           suggestions: suggestionsMatch ? suggestionsMatch[1].split(';').map((s: string) => s.trim()) : [],
-          retryable: false
+          retryable: retryable
         })
       } else {
         // 没有诊断日志，显示基本信息
         setDiagnoseResult({
+          deployment_id: record.id,
           step_name: record.current_step || '未知',
           error_message: record.error_message || '未知错误',
           diagnosis: '暂无 AI 诊断结果，部署可能因代码或基础设施问题失败',
           suggestions: ['检查部署日志获取详细错误信息', '确认代码无语法错误', '检查网络连接和资源可用性'],
-          retryable: false
+          retryable: true  // 没有诊断结果时默认可以重试
         })
       }
     } catch (error: any) {
