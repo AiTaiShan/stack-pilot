@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     LLM_BASE_URL: Optional[str] = None
     LLM_TIMEOUT: int = 60
 
+    LOG_LEVEL: str = "INFO"
+    LOG_DIR: str = "logs"
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, case_sensitive=True, extra="ignore")
 
 settings = Settings()

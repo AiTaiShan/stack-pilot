@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub llm_api_key: String,
     pub llm_model: String,
     pub llm_base_url: String,
+    pub log_level: String,
+    pub log_dir: String,
 }
 
 impl AppConfig {
@@ -74,6 +76,10 @@ impl AppConfig {
                 .unwrap_or_else(|_| "qwen-plus".to_string()),
             llm_base_url: std::env::var("LLM_BASE_URL")
                 .unwrap_or_else(|_| "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()),
+            log_level: std::env::var("LOG_LEVEL")
+                .unwrap_or_else(|_| "info".to_string()),
+            log_dir: std::env::var("LOG_DIR")
+                .unwrap_or_else(|_| "logs".to_string()),
         }
     }
 }

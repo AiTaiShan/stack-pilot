@@ -1,6 +1,9 @@
 import json
+import logging
 from src.agent.state import ReviewState
 from src.llm import get_llm_provider
+
+logger = logging.getLogger(__name__)
 
 
 async def fixer_node(state: ReviewState) -> dict:
@@ -19,6 +22,8 @@ async def fixer_node(state: ReviewState) -> dict:
     file_content = state["file_content"]
     file_type = state["file_type"]
 
+    logger.info("开始修复 %s: 待修复 issues=%d", file_type, len(issues))
+
     system_prompt = f"""你是一个{file_type}修复专家。请根据问题列表修复代码。
 
 要求：
@@ -32,12 +37,15 @@ async def fixer_node(state: ReviewState) -> dict:
     ]
 
     try:
+        logger.debug("发送 LLM 修复请求: model=%s, message_count=%d", llm.model, len(messages))
         response = await llm.chat(messages)
+        logger.info("修复完成 %s: 返回内容长度=%d", file_type, len(response))
         return {
             "fixed_content": response,
             "status": "needs_fix"
         }
     except Exception as e:
+        logger.error("修复节点异常 %s: %s", file_type, str(e), exc_info=True)
         return {
             "fixed_content": None,
             "status": "rejected",

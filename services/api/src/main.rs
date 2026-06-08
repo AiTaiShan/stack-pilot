@@ -12,6 +12,8 @@ use axum::middleware::from_fn;
 use std::net::SocketAddr;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
+use tracing_appender::rolling;
 use std::sync::Arc;
 
 use config::AppConfig;
@@ -32,14 +34,29 @@ use api::v1::members::MembersState;
 
 #[tokio::main]
 async fn main() {
-    // 初始化日志
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
-
     // 加载配置
     let config = AppConfig::from_env();
-    info!("配置加载完成");
+
+    // 初始化日志：按天切分文件 + 控制台输出
+    let log_level = &config.log_level;
+    let log_dir = &config.log_dir;
+    let file_appender = rolling::daily(log_dir, "api.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(format!("stackpilot_backend={log_level},tower_http={log_level}")))
+        )
+        .with_target(true)
+        .with_line_number(true)
+        .with_writer(std::io::stderr.and(non_blocking))
+        .init();
+
+    // 保持 _guard 存活直到进程退出（否则日志丢失）
+    let _guard = _guard;
+
+    info!("配置加载完成，日志目录: {}", log_dir);
 
     // 创建数据库连接
     let db = db::get_db(&config).await.expect("数据库连接失败");

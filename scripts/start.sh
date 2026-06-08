@@ -4,6 +4,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
+
 # ── 端口检查 ──────────────────────────────────────
 check_port() {
     local port=$1
@@ -46,16 +50,14 @@ if ! command -v uv &>/dev/null; then
     exit 1
 fi
 
-cd services/agent
+cd "$PROJECT_ROOT/services/agent"
 uv sync --quiet
-cd ../..
 
 AGENT_LOG="/tmp/stackpilot-agent.log"
-cd services/agent && uv run uvicorn src.main:app --reload --reload-dir src \
+uv run uvicorn src.main:app --reload --reload-dir src \
     --host 0.0.0.0 --port 8066 > "$AGENT_LOG" 2>&1 &
 AGENT_PID=$!
-cd ../..
-AGENT_PID=$!
+cd "$PROJECT_ROOT"
 
 # 等待 Agent 服务启动并检查存活
 sleep 3
@@ -74,15 +76,39 @@ if ! command -v cargo &> /dev/null; then
     exit 1
 fi
 
-echo "启动 Rust 主服务..."
-cd services/api
+echo "启动 Rust 主服务（首次编译可能需要 1-2 分钟）..."
+cd "$PROJECT_ROOT/services/api"
 if command -v cargo-watch &>/dev/null; then
     cargo watch -x run &
 else
     cargo run &
 fi
 BACKEND_PID=$!
-cd ../..
+cd "$PROJECT_ROOT"
+
+# 等待 Rust 服务编译完成并就绪
+echo -n "等待 Rust 主服务就绪"
+for i in $(seq 1 120); do
+    if ss -tlnp 2>/dev/null | grep -q ":9099 " || \
+       lsof -i :9099 -sTCP:LISTEN &>/dev/null 2>&1; then
+        echo ""
+        break
+    fi
+    if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+        echo ""
+        echo "错误: Rust 主服务启动失败"
+        exit 1
+    fi
+    echo -n "."
+    sleep 2
+done
+
+if ! ss -tlnp 2>/dev/null | grep -q ":9099 " && \
+   ! lsof -i :9099 -sTCP:LISTEN &>/dev/null 2>&1; then
+    echo ""
+    echo "错误: Rust 主服务在 240 秒内未就绪"
+    exit 1
+fi
 
 echo "StackPilot 已启动"
 echo "  - Rust 主服务: http://localhost:9099"

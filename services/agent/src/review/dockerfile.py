@@ -1,7 +1,10 @@
 """Dockerfile 审核模块"""
 
+import logging
 from src.agent.graph import review_graph
 from src.agent.state import ReviewState
+
+logger = logging.getLogger(__name__)
 
 
 async def review_dockerfile(project_info: dict, dockerfile_content: str) -> dict:
@@ -14,6 +17,10 @@ async def review_dockerfile(project_info: dict, dockerfile_content: str) -> dict
     Returns:
         审核结果字典，包含 status、issues、fixed_content、suggestions
     """
+    lang = project_info.get("language", "unknown")
+    framework = project_info.get("framework", "")
+    logger.info("开始 Dockerfile 审核: language=%s, framework=%s", lang, framework)
+
     initial_state: ReviewState = {
         "project_info": project_info,
         "file_content": dockerfile_content,
@@ -26,11 +33,17 @@ async def review_dockerfile(project_info: dict, dockerfile_content: str) -> dict
         "max_rounds": 3,
     }
 
-    result = await review_graph.ainvoke(initial_state)
+    try:
+        result = await review_graph.ainvoke(initial_state)
+        logger.info("Dockerfile 审核完成: status=%s, issues=%d, suggestions=%d",
+                     result["status"], len(result["issues"]), len(result.get("suggestions", [])))
 
-    return {
-        "status": result["status"],
-        "issues": result["issues"],
-        "fixed_content": result.get("fixed_content"),
-        "suggestions": result.get("suggestions", []),
-    }
+        return {
+            "status": result["status"],
+            "issues": result["issues"],
+            "fixed_content": result.get("fixed_content"),
+            "suggestions": result.get("suggestions", []),
+        }
+    except Exception as e:
+        logger.error("Dockerfile 审核流程异常: %s", str(e), exc_info=True)
+        raise

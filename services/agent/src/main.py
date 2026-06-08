@@ -4,7 +4,7 @@ from src.utils.logger import setup_logging
 from src.api.health import router as health_router
 from src.api.review import router as review_router
 
-setup_logging()
+setup_logging(log_level=settings.LOG_LEVEL, log_dir=settings.LOG_DIR)
 
 app = FastAPI(
     title=settings.APP_NAME,
