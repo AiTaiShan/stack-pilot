@@ -211,19 +211,23 @@ const Deployments: React.FC = () => {
   }
 
   const columns: ColumnType<any>[] = [
-    { title: '项目', dataIndex: 'project_name', key: 'project_name', width: 120 },
-    { title: '部署ID', dataIndex: 'id', key: 'id', width: 100, ellipsis: true },
+    { title: '项目', dataIndex: 'project_name', key: 'project_name', width: 120, ellipsis: true },
+    { title: '部署ID', dataIndex: 'id', key: 'id', width: 90, ellipsis: true },
     {
-      title: '状态', dataIndex: 'status', key: 'status', width: 90,
+      title: '状态', dataIndex: 'status', key: 'status', width: 90, align: 'center',
       render: (status: string) => <Tag color={statusColors[status] || 'default'}>{statusLabels[status] || status}</Tag>
     },
-    { title: '平台', dataIndex: 'platform', key: 'platform', width: 80 },
-    { title: '部署URL', dataIndex: 'deploy_url', key: 'deploy_url', ellipsis: true },
-    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180, render: (text: string) => formatDate(text) },
+    { title: '平台', dataIndex: 'platform', key: 'platform', width: 80, align: 'center' },
+    { title: '部署URL', dataIndex: 'deploy_url', key: 'deploy_url', width: 150, ellipsis: true },
+    {
+      title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 160,
+      sorter: (a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      render: (text: string) => formatDate(text)
+    },
     {
       title: '操作', key: 'action', width: 180, fixed: 'right',
       render: (_: any, record: any) => (
-        <Space size={4}>
+        <div style={{ display: 'flex', gap: 2, flexWrap: 'nowrap' }}>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openDrawer(record)}>
             详情
           </Button>
@@ -254,7 +258,7 @@ const Deployments: React.FC = () => {
               分析
             </Button>
           )}
-        </Space>
+        </div>
       )
     }
   ]
@@ -262,7 +266,20 @@ const Deployments: React.FC = () => {
   return (
     <div>
       <h2>部署记录</h2>
-      <Table columns={columns} dataSource={deployments} loading={loading} rowKey="id" />
+      <Table
+        columns={columns}
+        dataSource={deployments}
+        loading={loading}
+        rowKey="id"
+        size="middle"
+        scroll={{ x: 900 }}
+        pagination={{
+          pageSize: 10,
+          showSizeChanger: true,
+          showQuickJumper: true,
+          showTotal: (total) => `共 ${total} 条记录`,
+        }}
+      />
 
       <Drawer
         title="部署详情"
