@@ -1,10 +1,9 @@
 use tracing::info;
-use crate::error::AppError;
 use crate::services::scanner::dependency::service_map::ExternalService;
 
 /// 为微服务项目生成 docker-compose.yml
 pub fn generate_microservices_compose(
-    repo_name: &str,
+    _repo_name: &str,
     images: &[String],
     scan_result: &serde_json::Map<String, serde_json::Value>,
     external_services: &[ExternalService],

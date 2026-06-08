@@ -62,9 +62,11 @@ pub async fn execute(
 
     match platform {
         "docker" | "local" => {
-            // 检查是否需要生成微服务 compose（微服务项目总是覆盖）
+            // 检查是否需要生成微服务 compose（微服务/多模块项目总是覆盖）
             let compose_file = repo_dir.join("docker-compose.yml");
-            if project_type == "microservices" || project_type == "microservices-with-frontend" || project_type == "spring-cloud" {
+            if project_type == "microservices" || project_type == "microservices-with-frontend"
+                || project_type == "spring-cloud"
+                || project_type == "multi-module-java" || project_type == "multi-module-java-with-frontend" {
                 info!("生成微服务 docker-compose.yml");
 
                 let external_services: Vec<ExternalService> = scan_result
@@ -117,7 +119,7 @@ pub async fn execute(
                 .map_err(|e| AppError::InternalError(format!("docker compose 启动失败: {}", e)))?;
 
             if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
+                let _stderr = String::from_utf8_lossy(&output.stderr);
                 info!("docker compose (新版) 失败，尝试旧版 docker-compose...");
                 // 回退到旧版 docker-compose
                 let output2 = tokio::process::Command::new("docker-compose")
