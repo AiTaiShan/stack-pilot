@@ -1,8 +1,8 @@
 use tracing::info;
 use uuid::Uuid;
-use sea_orm::EntityTrait;
+use sea_orm::{EntityTrait, ActiveModelTrait, Set};
 use crate::error::AppError;
-use crate::models::deployment::{Entity as DeploymentEntity};
+use crate::models::deployment::{Entity as DeploymentEntity, ActiveModel as DeploymentActiveModel};
 use crate::services::deployer::docker::DockerService;
 
 pub async fn execute(
@@ -60,7 +60,17 @@ pub async fn execute(
     let docker_service = DockerService::new("");
     docker_service.build_image(&repo_dir, &tag, "Dockerfile").await?;
 
-    info!("镜像构建完成: {}", tag);
+    // ── 4. 持久化 image_tag 到数据库 ──
+    let dep = DeploymentEntity::find_by_id(deployment_id).one(&db).await
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?
+        .ok_or_else(|| AppError::NotFound("部署不存在".to_string()))?;
+
+    let mut active: DeploymentActiveModel = dep.into();
+    active.image_tag = Set(Some(tag.clone()));
+    active.update(&db).await
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    info!("镜像构建完成: {}，image_tag 已持久化", tag);
     Ok(())
 }
 

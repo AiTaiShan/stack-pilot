@@ -37,10 +37,10 @@ pub async fn execute(
         return Ok(());
     }
 
-    // 收集环境变量：从 .env 文件 + docker-compose.yml
+    // 收集环境变量：先读 .env，再用 compose 覆盖（compose 优先级更高）
     let mut env_vars: HashMap<String, String> = HashMap::new();
 
-    // 1. 从 .env 文件读取
+    // 1. 从 .env 文件读取（基础层）
     let env_path = repo_dir.join(".env");
     if env_path.exists() {
         let env_content = tokio::fs::read_to_string(&env_path).await
@@ -51,14 +51,17 @@ pub async fn execute(
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
+            // 去除 export 前缀
+            let line = line.strip_prefix("export ").unwrap_or(line);
             if let Some((key, value)) = line.split_once('=') {
-                env_vars.insert(key.trim().to_string(), value.trim().to_string());
+                let value = value.trim().trim_matches('"').trim_matches('\'');
+                env_vars.insert(key.trim().to_string(), value.to_string());
             }
         }
         info!("从 .env 文件读取到 {} 个环境变量", env_vars.len());
     }
 
-    // 2. 从 docker-compose.yml 的 environment 字段读取
+    // 2. 从 docker-compose.yml 的 environment 字段读取（覆盖层，优先级更高）
     let compose_path = repo_dir.join("docker-compose.yml");
     if compose_path.exists() {
         let compose_content = tokio::fs::read_to_string(&compose_path).await
@@ -66,10 +69,10 @@ pub async fn execute(
 
         let compose_vars = extract_env_from_compose(&compose_content);
         if !compose_vars.is_empty() {
-            info!("从 docker-compose.yml 读取到 {} 个环境变量", compose_vars.len());
-            // compose 中的环境变量作为补充，不覆盖 .env 中的值
+            info!("从 docker-compose.yml 读取到 {} 个环境变量（覆盖 .env 同名变量）", compose_vars.len());
+            // compose 中的环境变量覆盖 .env 中的同名值（Docker Compose 标准行为）
             for (key, value) in compose_vars {
-                env_vars.entry(key).or_insert(value);
+                env_vars.insert(key, value);
             }
         }
     }

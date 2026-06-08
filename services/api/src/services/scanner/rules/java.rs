@@ -209,10 +209,35 @@ fn parse_port_from_config(content: &str) -> Option<u16> {
         return caps[1].parse().ok();
     }
 
-    // yml 格式: port: 8081（在 server: 块下）
-    let re = Regex::new(r"(?m)^\s+port:\s*(\d+)").ok()?;
-    if let Some(caps) = re.captures(content) {
-        return caps[1].parse().ok();
+    // yml 格式: 在 server: 块下的 port: 8081
+    // 先找到 server: 行，再找其缩进子级的 port: 行
+    let mut in_server = false;
+    let mut server_indent = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if trimmed.starts_with("server:") && trimmed.ends_with(':') {
+            in_server = true;
+            server_indent = indent;
+            continue;
+        }
+        if in_server {
+            // 遇到同级或更低缩进的非空行，说明 server 块结束
+            if indent <= server_indent && !trimmed.is_empty() {
+                in_server = false;
+                continue;
+            }
+            // 在 server 块内找 port: 行
+            if trimmed.starts_with("port:") {
+                let re = Regex::new(r"port:\s*(\d+)").ok()?;
+                if let Some(caps) = re.captures(trimmed) {
+                    return caps[1].parse().ok();
+                }
+            }
+        }
     }
 
     None
