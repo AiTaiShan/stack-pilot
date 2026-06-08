@@ -2,7 +2,9 @@ import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 项目根目录：services/agent/ 的上两级
+_AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(_AGENT_DIR))
 _ENV_FILE = os.path.join(_PROJECT_ROOT, ".env")
 
 class Settings(BaseSettings):

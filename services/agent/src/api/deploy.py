@@ -60,8 +60,7 @@ async def api_deploy_diagnose(request: DeployDiagnoseRequest):
             "failure_category": "infra_error",
             "fixable_by_agent": False,
             "fixed_content": None,
-            "fixed_file_type": None,
-            "_next": "end"
+            "fixed_file_type": None
         }
 
         # 运行 deploy_graph
