@@ -85,6 +85,26 @@ impl DeploymentStateManager {
         let runtime = active.get(id).ok_or_else(|| AppError::NotFound("部署不在运行中".to_string()))?;
         runtime.cancel_tx.send(true).unwrap();
         info!("部署取消信号已发送: {}", id);
+
+        // 尝试回滚：停止 docker-compose 服务
+        if let Some(dep) = DeploymentEntity::find_by_id(*id).one(&self.db).await.ok().flatten() {
+            if let Some(git_url) = &dep.git_url {
+                let repo_name = git_url.rsplit('/').next()
+                    .unwrap_or("app")
+                    .replace(".git", "")
+                    .to_lowercase();
+                let project_name = format!("stackpilot-{}", repo_name);
+
+                // 尝试停止 docker-compose 服务
+                let _ = tokio::process::Command::new("docker")
+                    .args(["compose", "-p", &project_name, "down", "--remove-orphans"])
+                    .output()
+                    .await;
+
+                info!("已回滚部署资源: {}", project_name);
+            }
+        }
+
         Ok(())
     }
 

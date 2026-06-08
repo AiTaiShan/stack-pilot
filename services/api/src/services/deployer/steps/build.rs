@@ -278,9 +278,79 @@ fn find_executable_jar(target_dir: &std::path::Path) -> Option<String> {
         if name.contains("-sources") || name.contains("-javadoc") || name.contains("-tests") {
             continue;
         }
-        return Some(name);
+        // 检查是否为可执行 JAR
+        let jar_path = entry.path();
+        if is_executable_jar(&jar_path) {
+            return Some(name);
+        }
+    }
+    // 如果没有找到可执行 JAR，返回第一个普通 JAR
+    let entries = std::fs::read_dir(target_dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".jar") && !name.contains("-sources") && !name.contains("-javadoc") && !name.contains("-tests") {
+            return Some(name);
+        }
     }
     None
+}
+
+/// 检测 JAR 是否为可执行 JAR（检查内部结构）
+fn is_executable_jar(jar_path: &std::path::Path) -> bool {
+    use std::fs::File;
+    use std::io::Read;
+
+    let file = match File::open(jar_path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    let mut archive = match zip::ZipArchive::new(file) {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+
+    // 检查是否包含 BOOT-INF/（Spring Boot）
+    for i in 0..archive.len() {
+        let name = match archive.by_index(i) {
+            Ok(f) => f.name().to_string(),
+            Err(_) => continue,
+        };
+
+        if name.starts_with("BOOT-INF/") || name.starts_with("quarkus-app/") {
+            return true;
+        }
+
+        if name == "META-INF/MANIFEST.MF" {
+            let mut content = String::new();
+            if let Ok(mut f) = archive.by_index(i) {
+                if f.read_to_string(&mut content).is_ok() && content.contains("Main-Class: ") {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// 回退扫描：使用 glob 通配符查找所有 target 目录中的 JAR
+fn find_jars_glob(repo_dir: &std::path::Path) -> Vec<String> {
+    use glob::glob;
+
+    let pattern = format!("{}/**/target/*.jar", repo_dir.display());
+    let mut jars = Vec::new();
+
+    if let Ok(paths) = glob(&pattern) {
+        for path in paths.flatten() {
+            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            if !name.contains("-sources") && !name.contains("-javadoc") && !name.contains("-tests") {
+                jars.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    jars
 }
 
 /// 持久化 image_tag 到数据库

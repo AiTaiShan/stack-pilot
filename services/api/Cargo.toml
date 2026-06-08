@@ -63,6 +63,12 @@ regex = "1"
 # YAML 解析
 serde_yaml = "0.9"
 
+# ZIP 文件解析（用于 JAR 检测）
+zip = "0.6"
+
+# 文件通配符
+glob = "0.3"
+
 [dev-dependencies]
 tokio-test = "0.4"
 reqwest = { version = "0.11", features = ["json"] }
