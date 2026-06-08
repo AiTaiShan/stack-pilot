@@ -1,7 +1,7 @@
 use axum::Router;
 use axum::http::HeaderMap;
 use axum::routing::{get, post, delete};
-use axum::extract::{Path, State};
+use axum::extract::{Path, State, Query};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -33,6 +33,11 @@ pub struct CreateDeploymentRequest {
 }
 
 #[derive(Deserialize)]
+pub struct ListDeploymentsQuery {
+    pub project_id: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct UpdateComposeRequest {
     pub content: String,
 }
@@ -59,13 +64,22 @@ fn extract_user_id(headers: &HeaderMap, jwt_secret: &str) -> Result<String, AppE
 pub async fn list_deployments(
     State(state): State<DeploymentsState>,
     headers: HeaderMap,
+    Query(params): Query<ListDeploymentsQuery>,
 ) -> Json<Value> {
     let _user_id = match extract_user_id(&headers, &state.jwt_secret) {
         Ok(id) => id,
         Err(e) => return Json(json!({"code": 401, "message": e.to_string()})),
     };
 
-    match DeploymentEntity::find()
+    let mut query = DeploymentEntity::find();
+
+    if let Some(pid) = params.project_id {
+        if let Ok(uuid) = Uuid::parse_str(&pid) {
+            query = query.filter(deployment::Column::ProjectId.eq(uuid));
+        }
+    }
+
+    match query
         .order_by_desc(deployment::Column::CreatedAt)
         .all(&state.db)
         .await

@@ -134,10 +134,10 @@ const ProjectDetail: React.FC = () => {
   const handleDeploy = async (values: { branch: string; platform: string }) => {
     try {
       await client.post('/deployments', {
+        project_id: id,
         git_url: project.git_url,
         branch: values.branch,
         platform: values.platform,
-        config: { project_id: id }
       })
       message.success('部署已触发')
       setDeployModalVisible(false)
@@ -175,10 +175,10 @@ const ProjectDetail: React.FC = () => {
   const handleRedeploy = async (record: any) => {
     try {
       await client.post('/deployments', {
+        project_id: id,
         git_url: project.git_url,
         branch: record.branch,
         platform: record.platform,
-        config: { project_id: id }
       })
       message.success('重新部署已触发')
       fetchData()

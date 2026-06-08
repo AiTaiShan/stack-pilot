@@ -149,10 +149,10 @@ const Deployments: React.FC = () => {
   const handleRedeploy = async (record: any) => {
     try {
       await client.post('/deployments', {
+        project_id: record.project_id,
         git_url: record.git_url,
         branch: record.branch,
         platform: record.platform,
-        config: { project_id: record.project_id }
       })
       message.success('重新部署已触发')
       fetchDeployments()
