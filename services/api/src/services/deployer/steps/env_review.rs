@@ -77,6 +77,15 @@ pub async fn execute(
         }
     }
 
+    // 3. 扫描项目配置文件中的 ${...} 占位符和待填写值（对齐 Python 版）
+    let config_vars = scan_config_placeholders(&repo_dir).await;
+    if !config_vars.is_empty() {
+        info!("从配置文件扫描到 {} 个待填写的环境变量占位符", config_vars.len());
+        for (key, value) in config_vars {
+            env_vars.entry(key).or_insert(value);
+        }
+    }
+
     if env_vars.is_empty() {
         info!("没有环境变量需要审核");
         return Ok(());
@@ -186,4 +195,108 @@ fn extract_env_from_compose(content: &str) -> HashMap<String, String> {
     }
 
     env_vars
+}
+
+/// 扫描项目配置文件中的 ${...} 占位符和待填写值（对齐 Python 版 _generate_service_env_vars）
+/// 扫描 application.yml/properties/.env 等文件，提取需要用户填写的环境变量
+async fn scan_config_placeholders(repo_dir: &std::path::Path) -> HashMap<String, String> {
+    use regex::Regex;
+
+    let mut vars = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+
+    let skip_dirs = [".git", "node_modules", "target", ".mvn", "__pycache__",
+                     ".stackpilot", "dist", "build", ".idea", "vendor"];
+
+    let config_extensions = [".properties", ".yml", ".yaml", ".env"];
+
+    // Spring 占位符模式: ${VAR_NAME} 或 ${VAR_NAME:default}
+    let re_placeholder = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::[^}]*)?\}").ok();
+    // 待填写模式: CHANGE_ME, TODO, xxx, your_xxx
+    let re_todo = Regex::new(r"(?i)(CHANGE_ME|TODO|xxx|your_\w+)").ok();
+    // 连接串中的占位符: jdbc:mysql://localhost:3306/db 中的密码等
+    let re_conn = Regex::new(r"(?i)(PASSWORD|SECRET|TOKEN|API_KEY)\s*[:=]\s*(\$\{[^}]+\}|CHANGE_ME|TODO|xxx)").ok();
+
+    // 递归扫描目录
+    let mut dirs_to_scan = vec![repo_dir.to_path_buf()];
+    while let Some(dir) = dirs_to_scan.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if path.is_dir() {
+                if !skip_dirs.contains(&name.as_str()) && !name.starts_with('.') {
+                    dirs_to_scan.push(path);
+                }
+                continue;
+            }
+
+            // 只扫描配置文件
+            let is_config = config_extensions.iter().any(|ext| name.ends_with(ext));
+            if !is_config {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let rel_path = path.strip_prefix(repo_dir)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or(name);
+
+            for (line_no, line) in content.lines().enumerate() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+                    continue;
+                }
+
+                // 提取 ${VAR_NAME} 占位符
+                if let Some(ref re) = re_placeholder {
+                    for caps in re.captures_iter(line) {
+                        let var_name = caps[1].to_string();
+                        if seen.insert(var_name.clone()) {
+                            vars.insert(var_name.clone(), format!("${{{}}}", var_name));
+                            info!("  配置占位符: {} (文件: {}:{})", var_name, rel_path, line_no + 1);
+                        }
+                    }
+                }
+
+                // 提取 CHANGE_ME/TODO 等待填写的值
+                if let Some(ref re) = re_todo {
+                    if re.is_match(line) {
+                        // 从行中提取 key
+                        if let Some((key, _)) = trimmed.split_once(|c| c == ':' || c == '=') {
+                            let key = key.trim().trim_matches('"').trim_matches('\'');
+                            if !key.is_empty() && key.len() < 80 && !key.contains(' ') {
+                                if seen.insert(key.to_string()) {
+                                    vars.insert(key.to_string(), "CHANGE_ME".to_string());
+                                    info!("  待填写值: {} (文件: {}:{})", key, rel_path, line_no + 1);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 提取连接串中的敏感占位符
+                if let Some(ref re) = re_conn {
+                    for caps in re.captures_iter(line) {
+                        let var_name = caps[1].to_uppercase();
+                        if seen.insert(var_name.clone()) {
+                            vars.insert(var_name.clone(), "CHANGE_ME".to_string());
+                            info!("  连接串占位符: {} (文件: {}:{})", var_name, rel_path, line_no + 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    vars
 }
